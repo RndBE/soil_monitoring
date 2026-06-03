@@ -222,6 +222,7 @@ export const boreholeStatus: BoreholeRow[] = [
 
 export type PeatRow = {
   station: string
+  block: string
   peatDepth: number
   soilMoisture: number
   soilTemp: number
@@ -229,10 +230,10 @@ export type PeatRow = {
 }
 
 export const peatMonitoring: PeatRow[] = [
-  { station: "PMS-01", peatDepth: 322, soilMoisture: 68, soilTemp: 28.4, status: "normal" },
-  { station: "PMS-02", peatDepth: 305, soilMoisture: 65, soilTemp: 28.1, status: "normal" },
-  { station: "PMS-03", peatDepth: 289, soilMoisture: 38, soilTemp: 29.2, status: "warning" },
-  { station: "PMS-04", peatDepth: 310, soilMoisture: 71, soilTemp: 27.6, status: "normal" },
+  { station: "PMS-01", block: "Block A", peatDepth: 322, soilMoisture: 68, soilTemp: 28.4, status: "normal" },
+  { station: "PMS-02", block: "Block B", peatDepth: 305, soilMoisture: 65, soilTemp: 28.1, status: "normal" },
+  { station: "PMS-03", block: "Block C", peatDepth: 289, soilMoisture: 38, soilTemp: 29.2, status: "warning" },
+  { station: "PMS-04", block: "Block D", peatDepth: 310, soilMoisture: 71, soilTemp: 27.6, status: "normal" },
 ]
 
 export type NdviRow = {

@@ -29,6 +29,8 @@ import { toast } from "sonner"
 
 import { Panel, ViewAll } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
 type Tone = "normal" | "warning" | "critical" | "info"
@@ -164,6 +166,8 @@ type GaugeStatus = "normal" | "warning" | "critical"
 type GaugeRow = {
   gauge: string
   block: string
+  // Division yang dipakai filter global (selaras dengan DIVISION_OPTIONS).
+  division: string
   d24: number
   d7: number
   intensity: Intensity
@@ -172,12 +176,12 @@ type GaugeRow = {
 }
 
 const initialGauges: GaugeRow[] = [
-  { gauge: "RG-01", block: "Blok A2", d24: 22.4, d7: 96.0, intensity: "Moderate", status: "normal" },
-  { gauge: "RG-02", block: "Blok B1", d24: 38.6, d7: 142.8, intensity: "Heavy", status: "normal" },
-  { gauge: "RG-03", block: "Blok C4", d24: 8.2, d7: 54.5, intensity: "Light", status: "normal" },
-  { gauge: "RG-04", block: "Blok D3", d24: 0.0, d7: 0.0, intensity: "None", status: "critical", alert: true },
-  { gauge: "RG-05", block: "Blok E2", d24: 14.0, d7: 71.2, intensity: "Moderate", status: "normal" },
-  { gauge: "RG-06", block: "Blok F1", d24: 3.4, d7: 19.6, intensity: "Light", status: "warning" },
+  { gauge: "RG-01", block: "Blok A2", division: "Block A", d24: 22.4, d7: 96.0, intensity: "Moderate", status: "normal" },
+  { gauge: "RG-02", block: "Blok B1", division: "Block B", d24: 38.6, d7: 142.8, intensity: "Heavy", status: "normal" },
+  { gauge: "RG-03", block: "Blok C4", division: "Block C", d24: 8.2, d7: 54.5, intensity: "Light", status: "normal" },
+  { gauge: "RG-04", block: "Blok D3", division: "Block D", d24: 0.0, d7: 0.0, intensity: "None", status: "critical", alert: true },
+  { gauge: "RG-05", block: "Blok E2", division: "Block E", d24: 14.0, d7: 71.2, intensity: "Moderate", status: "normal" },
+  { gauge: "RG-06", block: "Blok F1", division: "Block A", d24: 3.4, d7: 19.6, intensity: "Light", status: "warning" },
 ]
 
 const statusStyle: Record<GaugeStatus, { text: string; dot: string; label: string }> = {
@@ -187,6 +191,7 @@ const statusStyle: Record<GaugeStatus, { text: string; dot: string; label: strin
 }
 
 export default function WeatherRainfallPage() {
+  const { estate, division } = useDashboardFilters()
   const [range, setRange] = useState<(typeof RANGE_OPTIONS)[number]>(RANGE_OPTIONS[0])
   const [rangeOpen, setRangeOpen] = useState(false)
   const [unit, setUnit] = useState<"C" | "F">("C")
@@ -195,25 +200,59 @@ export default function WeatherRainfallPage() {
   const toF = (c: number) => Math.round(c * 1.8 + 32)
   const fmtTemp = (c: number) => (unit === "C" ? `${c}°` : `${toF(c)}°`)
 
+  // ESTATE: skala angka headline KPI (suhu, hujan, kelembapan, dll) per estate.
+  const kpis = useMemo(
+    () => [
+      { label: "Temperature", value: scaleNumericString("24", estate) + "°C", unit: undefined, icon: ThermometerIcon, tone: "normal" as Tone, delta: "1.2°C", deltaUp: true },
+      { label: "Rainfall 24h", value: scaleNumericString("18.6", estate), unit: "mm", icon: CloudRainIcon, tone: "info" as Tone, delta: "6.4 mm", deltaUp: true },
+      { label: "Humidity", value: scaleNumericString("82%", estate), unit: undefined, icon: DropletsIcon, tone: "info" as Tone, delta: "3%", deltaUp: false },
+      { label: "Wind", value: scaleNumericString("9", estate), unit: "km/h NE", icon: WindIcon, tone: "normal" as Tone, delta: "2 km/h", deltaUp: true },
+      { label: "Solar Radiation", value: scaleNumericString("412", estate), unit: "W/m²", icon: SunIcon, tone: "warning" as Tone, delta: "48 W/m²", deltaUp: true },
+      { label: "Evapotranspiration", value: scaleNumericString("3.1", estate), unit: "mm", icon: GaugeIcon, tone: "warning" as Tone, delta: "0.4 mm", deltaUp: true },
+    ],
+    [estate]
+  )
+
+  // ESTATE: skala deret hujan 7 hari agar grafik ikut berubah per estate.
   // Reflect the selected range by trimming/extending the rendered bar series.
   const rainfallData = useMemo(() => {
-    if (range === "7 Hari") return rainfall7d
+    const scaled = rainfall7d.map((d) => ({ day: d.day, mm: scaleNumber(d.mm, estate) }))
+    if (range === "7 Hari") return scaled
     const reps = range === "14 Hari" ? 2 : 4
     return Array.from({ length: reps }).flatMap((_, r) =>
-      rainfall7d.map((d) => ({ day: `${d.day}${r > 0 ? `·${r + 1}` : ""}`, mm: d.mm }))
+      scaled.map((d) => ({ day: `${d.day}${r > 0 ? `·${r + 1}` : ""}`, mm: d.mm }))
     )
-  }, [range])
+  }, [range, estate])
+
+  // DIVISION + ESTATE: saring rain gauge per block; skala nilai mm per estate.
+  const filteredGauges = useMemo(
+    () =>
+      gaugeRows
+        .filter((g) => matchesBlock(g.division, division))
+        .map((g) => ({
+          ...g,
+          d24: scaleNumber(g.d24, estate, 1),
+          d7: scaleNumber(g.d7, estate, 1),
+        })),
+    [gaugeRows, division, estate]
+  )
 
   return (
     <PeatShell title="Weather & Rainfall" subtitle="Meteorological Monitoring">
       {/* KPI ROW */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Temperature" value="24°C" icon={ThermometerIcon} tone="normal" delta="1.2°C" deltaUp />
-        <StatTile label="Rainfall 24h" value="18.6" unit="mm" icon={CloudRainIcon} tone="info" delta="6.4 mm" deltaUp />
-        <StatTile label="Humidity" value="82%" icon={DropletsIcon} tone="info" delta="3%" />
-        <StatTile label="Wind" value="9" unit="km/h NE" icon={WindIcon} tone="normal" delta="2 km/h" deltaUp />
-        <StatTile label="Solar Radiation" value="412" unit="W/m²" icon={SunIcon} tone="warning" delta="48 W/m²" deltaUp />
-        <StatTile label="Evapotranspiration" value="3.1" unit="mm" icon={GaugeIcon} tone="warning" delta="0.4 mm" deltaUp />
+        {kpis.map((k) => (
+          <StatTile
+            key={k.label}
+            label={k.label}
+            value={k.value}
+            unit={k.unit}
+            icon={k.icon}
+            tone={k.tone}
+            delta={k.delta}
+            deltaUp={k.deltaUp}
+          />
+        ))}
       </div>
 
       {/* CHARTS ROW */}
@@ -410,7 +449,14 @@ export default function WeatherRainfallPage() {
             </tr>
           </thead>
           <tbody>
-            {gaugeRows.map((g) => {
+            {filteredGauges.length === 0 && (
+              <tr className="border-t border-white/5">
+                <td className={cn(td, "text-center text-white/40")} colSpan={6}>
+                  Tidak ada rain gauge untuk division ini.
+                </td>
+              </tr>
+            )}
+            {filteredGauges.map((g) => {
               const ints = intensityStyle[g.intensity]
               const st = statusStyle[g.status]
               return (

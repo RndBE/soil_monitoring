@@ -5,6 +5,7 @@ import "./globals.css";
 import { Geist } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { DashboardFiltersProvider } from "@/lib/peatland/filters";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -26,7 +27,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="id" className={geist.variable}>
       <body>
-        <TooltipProvider>{children}</TooltipProvider>
+        <DashboardFiltersProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </DashboardFiltersProvider>
         <Toaster position="top-right" richColors closeButton />
       </body>
     </html>

@@ -1,3 +1,5 @@
+"use client"
+
 import {
   boreholeStatus,
   peatMonitoring,
@@ -5,8 +7,12 @@ import {
   type NdviRow,
   type StatusLevel,
 } from "@/lib/peatland/mock-data"
+import { matchesBlock, scaleNumber } from "@/lib/peatland/filter-logic"
+import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
 import { Panel, ViewAll } from "./panel"
+
+const emptyTd = "px-3 py-6 text-center text-[12px] text-white/40"
 
 const statusStyle: Record<StatusLevel, { text: string; dot: string; label: string }> = {
   normal: { text: "text-emerald-400", dot: "bg-emerald-500", label: "Normal" },
@@ -45,6 +51,8 @@ const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-whi
 const td = "px-3 py-2 text-[12px]"
 
 export function BoreholeTable() {
+  const { estate, division } = useDashboardFilters()
+  const rows = boreholeStatus.filter((r) => matchesBlock(r.location, division))
   return (
     <Panel>
       <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
@@ -62,7 +70,7 @@ export function BoreholeTable() {
           </tr>
         </thead>
         <tbody>
-          {boreholeStatus.map((r) => {
+          {rows.map((r) => {
             const s = statusStyle[r.status]
             const sparkColor =
               r.status === "critical" ? "#ef4444" : r.status === "warning" ? "#f59e0b" : "#22c55e"
@@ -70,16 +78,23 @@ export function BoreholeTable() {
               <tr key={r.id} className="border-t border-white/5 hover:bg-white/[0.03]">
                 <td className={cn(td, "font-medium text-white/85")}>{r.id}</td>
                 <td className={cn(td, "text-white/55")}>{r.location}</td>
-                <td className={cn(td, s.text, "font-medium")}>{r.waterLevel} cm</td>
+                <td className={cn(td, s.text, "font-medium")}>{scaleNumber(r.waterLevel, estate)} cm</td>
                 <td className={td}>
                   <StatusPill status={r.status} />
                 </td>
                 <td className={cn(td, "flex justify-end")}>
-                  <Sparkline data={r.trend} color={sparkColor} />
+                  <Sparkline data={r.trend.map((v) => scaleNumber(v, estate))} color={sparkColor} />
                 </td>
               </tr>
             )
           })}
+          {rows.length === 0 && (
+            <tr className="border-t border-white/5">
+              <td className={emptyTd} colSpan={5}>
+                Tidak ada borehole di {division}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </Panel>
@@ -87,6 +102,8 @@ export function BoreholeTable() {
 }
 
 export function PeatTable() {
+  const { estate, division } = useDashboardFilters()
+  const rows = peatMonitoring.filter((r) => matchesBlock(r.block, division))
   return (
     <Panel>
       <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
@@ -106,17 +123,24 @@ export function PeatTable() {
           </tr>
         </thead>
         <tbody>
-          {peatMonitoring.map((r) => (
+          {rows.map((r) => (
             <tr key={r.station} className="border-t border-white/5 hover:bg-white/[0.03]">
               <td className={cn(td, "font-medium text-white/85")}>{r.station}</td>
-              <td className={cn(td, "text-white/70")}>{r.peatDepth} cm</td>
-              <td className={cn(td, "text-white/70")}>{r.soilMoisture}%</td>
-              <td className={cn(td, "text-white/70")}>{r.soilTemp.toFixed(1)}°C</td>
+              <td className={cn(td, "text-white/70")}>{scaleNumber(r.peatDepth, estate)} cm</td>
+              <td className={cn(td, "text-white/70")}>{scaleNumber(r.soilMoisture, estate)}%</td>
+              <td className={cn(td, "text-white/70")}>{scaleNumber(r.soilTemp, estate, 1).toFixed(1)}°C</td>
               <td className={cn(td, "text-right")}>
                 <StatusPill status={r.status} />
               </td>
             </tr>
           ))}
+          {rows.length === 0 && (
+            <tr className="border-t border-white/5">
+              <td className={emptyTd} colSpan={5}>
+                Tidak ada stasiun peat di {division}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </Panel>
@@ -137,6 +161,8 @@ const ndviText: Record<NdviRow["healthTone"], string> = {
 }
 
 export function NdviTable() {
+  const { estate, division } = useDashboardFilters()
+  const rows = plantationHealth.filter((r) => matchesBlock(r.block, division))
   return (
     <Panel>
       <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
@@ -153,21 +179,31 @@ export function NdviTable() {
           </tr>
         </thead>
         <tbody>
-          {plantationHealth.map((r) => (
-            <tr key={r.block} className="border-t border-white/5 hover:bg-white/[0.03]">
-              <td className={cn(td, "font-medium text-white/85")}>{r.block}</td>
-              <td className={cn(td, "font-medium text-white/80")}>{r.ndvi.toFixed(2)}</td>
-              <td className={td}>
-                <div className="flex items-center gap-2">
-                  <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
-                    <div className={cn("h-full rounded-full", ndviBar[r.healthTone])} style={{ width: `${r.ndvi * 100}%` }} />
+          {rows.map((r) => {
+            const ndvi = Math.min(1, scaleNumber(r.ndvi, estate, 2))
+            return (
+              <tr key={r.block} className="border-t border-white/5 hover:bg-white/[0.03]">
+                <td className={cn(td, "font-medium text-white/85")}>{r.block}</td>
+                <td className={cn(td, "font-medium text-white/80")}>{ndvi.toFixed(2)}</td>
+                <td className={td}>
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
+                      <div className={cn("h-full rounded-full", ndviBar[r.healthTone])} style={{ width: `${ndvi * 100}%` }} />
+                    </div>
+                    <span className={cn("text-[11.5px] font-medium", ndviText[r.healthTone])}>{r.health}</span>
                   </div>
-                  <span className={cn("text-[11.5px] font-medium", ndviText[r.healthTone])}>{r.health}</span>
-                </div>
+                </td>
+                <td className={cn(td, "text-right text-white/70")}>{scaleNumber(r.area, estate).toLocaleString()}</td>
+              </tr>
+            )
+          })}
+          {rows.length === 0 && (
+            <tr className="border-t border-white/5">
+              <td className={emptyTd} colSpan={4}>
+                Tidak ada blok plantation di {division}
               </td>
-              <td className={cn(td, "text-right text-white/70")}>{r.area.toLocaleString()}</td>
             </tr>
-          ))}
+          )}
         </tbody>
       </table>
     </Panel>

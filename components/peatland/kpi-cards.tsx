@@ -1,3 +1,5 @@
+"use client"
+
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -9,6 +11,8 @@ import {
 } from "lucide-react"
 
 import { kpis, type Kpi } from "@/lib/peatland/mock-data"
+import { scaleNumericString } from "@/lib/peatland/filter-logic"
+import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
 
 const iconMap = {
@@ -78,10 +82,11 @@ function KpiCard({ k }: { k: Kpi }) {
 }
 
 export function KpiCards() {
+  const { estate } = useDashboardFilters()
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
       {kpis.map((k) => (
-        <KpiCard key={k.key} k={k} />
+        <KpiCard key={k.key} k={{ ...k, value: scaleNumericString(k.value, estate) }} />
       ))}
     </div>
   )

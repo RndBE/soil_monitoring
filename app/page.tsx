@@ -1,4 +1,5 @@
 import { AlertCenter } from "@/components/peatland/alert-center"
+import { CctvPanel } from "@/components/peatland/cctv-panel"
 import { FireRiskChart, RainfallCorrelationChart, WaterTableChart } from "@/components/peatland/charts"
 import { BoreholeTable, NdviTable, PeatTable } from "@/components/peatland/data-tables"
 import { EstateMap } from "@/components/peatland/estate-map"
@@ -19,6 +20,9 @@ export default function Home() {
         <EstateMap />
         <AlertCenter />
       </div>
+
+      {/* CCTV */}
+      <CctvPanel />
 
       {/* Charts */}
       <div className="grid gap-4 xl:grid-cols-3">

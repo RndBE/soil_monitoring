@@ -36,6 +36,8 @@ import { toast } from "sonner"
 
 import { Panel, PanelHeader, ViewAll } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
 type Tone = "emerald" | "amber" | "red" | "sky" | "lime" | "orange"
@@ -228,14 +230,57 @@ const HARVEST_PERIODS = ["YTD 2026", "Last 6 months", "Last 12 months", "Last qu
 const BLOCK_FILTERS = ["All", "Optimal", "Good", "Below Target"] as const
 
 export default function AgriculturePage() {
+  const { estate, division } = useDashboardFilters()
   const [tasks, setTasks] = useState(initialTasks)
   const [period, setPeriod] = useState<(typeof HARVEST_PERIODS)[number]>(HARVEST_PERIODS[0])
   const [periodOpen, setPeriodOpen] = useState(false)
   const [blockFilter, setBlockFilter] = useState<(typeof BLOCK_FILTERS)[number]>("All")
 
+  // KPI headline numbers scaled per selected estate. Values with thousands
+  // separators (e.g. "3,420") are unformatted before scaling, then re-grouped.
+  const scaledKpis = useMemo(
+    () =>
+      kpis.map((k) => {
+        const raw = k.value.replace(/,/g, "")
+        const scaled = scaleNumericString(raw, estate)
+        const grouped = k.value.includes(",")
+          ? Number(scaled).toLocaleString("en-US")
+          : scaled
+        return { ...k, value: grouped }
+      }),
+    [estate]
+  )
+
+  // Block Productivity rows filtered by the global division as well as the
+  // existing local status toggle.
   const visibleBlocks = useMemo(
-    () => (blockFilter === "All" ? blocks : blocks.filter((b) => b.status === blockFilter)),
-    [blockFilter]
+    () =>
+      blocks
+        .filter((b) => matchesBlock(b.block, division))
+        .filter((b) => blockFilter === "All" || b.status === blockFilter)
+        .map((b) => ({
+          ...b,
+          palms: scaleNumber(b.palms, estate),
+          ffb: scaleNumber(b.ffb, estate),
+          prod: scaleNumber(b.prod, estate, 1),
+        })),
+    [blockFilter, division, estate]
+  )
+
+  // Upcoming field tasks filtered by the global division.
+  const visibleTasks = useMemo(
+    () => tasks.filter((t) => matchesBlock(t.block, division)),
+    [tasks, division]
+  )
+
+  // Chart series scaled per estate so headline charts track the KPI tiles.
+  const scaledMonthlyHarvest = useMemo(
+    () => monthlyHarvest.map((m) => ({ ...m, t: scaleNumber(m.t, estate) })),
+    [estate]
+  )
+  const scaledYieldTrend = useMemo(
+    () => yieldTrend.map((y) => ({ ...y, v: scaleNumber(y.v, estate, 1) })),
+    [estate]
   )
 
   const advanceTask = (id: string) => {
@@ -284,7 +329,7 @@ export default function AgriculturePage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {kpis.map((k) => (
+        {scaledKpis.map((k) => (
           <StatTile key={k.label} {...k} />
         ))}
       </div>
@@ -330,7 +375,7 @@ export default function AgriculturePage() {
           />
           <div className="h-[200px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={monthlyHarvest} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+              <BarChart data={scaledMonthlyHarvest} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
                 <XAxis dataKey="month" {...axisProps} />
                 <YAxis domain={[2400, 3800]} {...axisProps} width={40} />
@@ -345,7 +390,7 @@ export default function AgriculturePage() {
           <PanelHeader title="Yield Trend (t/ha)" subtitle="Trailing 12 months" action={<ViewAll />} />
           <div className="h-[200px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={yieldTrend} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+              <LineChart data={scaledYieldTrend} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
                 <XAxis dataKey="month" {...axisProps} />
                 <YAxis domain={[18, 23]} {...axisProps} width={34} ticks={[18, 19, 20, 21, 22, 23]} />
@@ -390,7 +435,12 @@ export default function AgriculturePage() {
             }
           />
           <div className="flex flex-col px-2 pb-2">
-            {tasks.map((t) => {
+            {visibleTasks.length === 0 && (
+              <div className="px-2 py-6 text-center text-[12px] text-white/40">
+                Tidak ada tugas di {division}.
+              </div>
+            )}
+            {visibleTasks.map((t) => {
               const tone = taskStatusTone[t.status]
               const s = taskTone[tone]
               const Icon = t.icon
@@ -430,7 +480,9 @@ export default function AgriculturePage() {
             })}
             <div className="flex items-center gap-2 px-2 pt-2 text-[11px] text-white/40">
               <ClockIcon className="size-3.5" />
-              <span>{tasks.length} tasks across {new Set(tasks.map((t) => t.block)).size} blocks this week</span>
+              <span>
+                {visibleTasks.length} tasks across {new Set(visibleTasks.map((t) => t.block)).size} blocks this week
+              </span>
             </div>
           </div>
         </Panel>
@@ -500,7 +552,9 @@ export default function AgriculturePage() {
               {visibleBlocks.length === 0 && (
                 <tr className="border-t border-white/5">
                   <td className={cn(td, "text-white/40")} colSpan={6}>
-                    Tidak ada blok untuk filter ini.
+                    {division === "All Blocks"
+                      ? "Tidak ada blok untuk filter ini."
+                      : `Tidak ada data di ${division}.`}
                   </td>
                 </tr>
               )}
