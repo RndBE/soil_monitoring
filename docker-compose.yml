@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: irigasi-dashboard-mysql
+    environment:
+      MYSQL_DATABASE: irigasi_dashboard
+      MYSQL_USER: irigasi
+      MYSQL_PASSWORD: irigasi
+      MYSQL_ROOT_PASSWORD: madiun2001
+    ports:
+      - "3306:3306"
+    volumes:
+      - irigasi-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pmadiun2001 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  irigasi-mysql-data:

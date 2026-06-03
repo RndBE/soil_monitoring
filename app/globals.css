@@ -1,0 +1,533 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "leaflet/dist/leaflet.css";
+
+@custom-variant dark (&:is(.dark *));
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: #0f172a;
+  color: #ffffff;
+}
+
+@theme inline {
+  --font-heading: var(--font-geist-sans);
+  --font-sans: var(--font-geist-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+@keyframes ui-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes login-radar-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes login-wave-drift {
+  0%,
+  100% {
+    stroke-dasharray: 8 14;
+    stroke-dashoffset: 0;
+    opacity: 0.52;
+  }
+  50% {
+    stroke-dasharray: 18 10;
+    stroke-dashoffset: -28;
+    opacity: 0.92;
+  }
+}
+
+@keyframes login-marker-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.72;
+  }
+  50% {
+    transform: scale(1.16);
+    opacity: 1;
+  }
+}
+
+@keyframes login-scan-progress {
+  0% {
+    width: 20%;
+    transform: translateX(0);
+  }
+  50% {
+    width: 74%;
+    transform: translateX(10%);
+  }
+  100% {
+    width: 48%;
+    transform: translateX(104%);
+  }
+}
+
+@keyframes login-soft-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes login-route-flow {
+  to {
+    stroke-dashoffset: -90;
+  }
+}
+
+@keyframes login-spark-flow {
+  0% {
+    stroke-dashoffset: 300;
+  }
+  45% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -300;
+  }
+}
+
+@keyframes login-grid-drift {
+  from {
+    background-position:
+      0 0,
+      0 0,
+      0 0;
+  }
+  to {
+    background-position:
+      48px 0,
+      0 48px,
+      0 0;
+  }
+}
+
+@keyframes login-panel-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 24px 70px rgb(15 23 42 / 0.08),
+      inset 0 1px 0 rgb(255 255 255 / 0.7);
+  }
+  50% {
+    box-shadow:
+      0 28px 86px rgb(15 23 42 / 0.12),
+      inset 0 1px 0 rgb(255 255 255 / 0.8);
+  }
+}
+
+@layer components {
+  .motion-fade-in {
+    animation: ui-enter 180ms ease-out both;
+  }
+
+  .interactive-card {
+    transform: translateZ(0);
+    transition:
+      transform 180ms ease,
+      box-shadow 180ms ease,
+      border-color 180ms ease,
+      background-color 180ms ease;
+  }
+
+  .interactive-card:hover,
+  .interactive-card:focus-within {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 32px rgb(15 23 42 / 0.08);
+  }
+
+  .interactive-card:active {
+    transform: translateY(0);
+  }
+
+  .interactive-tile {
+    transform: translateZ(0);
+    transition:
+      transform 160ms ease,
+      box-shadow 160ms ease,
+      border-color 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .interactive-tile:hover,
+  .interactive-tile:focus-visible {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgb(15 23 42 / 0.07);
+  }
+
+  .interactive-icon {
+    transition:
+      transform 180ms ease,
+      color 180ms ease,
+      opacity 180ms ease;
+  }
+
+  .interactive-card:hover .interactive-icon,
+  .interactive-tile:hover .interactive-icon {
+    transform: translateX(1px) scale(1.04);
+  }
+
+  [data-slot="button"] > svg,
+  [data-slot="sidebar-menu-button"] > svg {
+    transition: transform 160ms ease;
+  }
+
+  [data-slot="button"]:hover > svg,
+  [data-slot="sidebar-menu-button"]:hover > svg {
+    transform: translateY(-1px);
+  }
+
+  [data-slot="table-body"] [data-slot="table-row"] {
+    transition:
+      background-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  [data-slot="table-body"] [data-slot="table-row"]:hover {
+    box-shadow: inset 3px 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+
+  .risk-map-marker > div {
+    transition:
+      transform 180ms ease,
+      box-shadow 180ms ease,
+      border-color 180ms ease;
+  }
+
+  .risk-map-marker:hover > div {
+    transform: translateY(-2px) scale(1.08);
+    box-shadow: 0 16px 34px rgb(15 23 42 / 0.32);
+  }
+
+  .risk-map-marker span {
+    animation: pulse-dot 1.8s ease-in-out infinite;
+  }
+
+  .login-radar-sweep {
+    animation: login-radar-rotate 4.5s linear infinite;
+  }
+
+  .login-ops-bg {
+    background:
+      linear-gradient(90deg, rgb(15 23 42 / 0.045) 1px, transparent 1px),
+      linear-gradient(0deg, rgb(15 23 42 / 0.04) 1px, transparent 1px),
+      linear-gradient(180deg, #f8fafc 0%, #eef2f7 46%, #dceff2 100%);
+    background-size:
+      48px 48px,
+      48px 48px,
+      auto;
+    animation: login-grid-drift 18s linear infinite;
+  }
+
+  .login-command-card,
+  .login-side-panel,
+  .login-alert-strip {
+    animation: login-soft-enter 420ms ease-out both;
+    box-shadow:
+      0 24px 72px rgb(15 23 42 / 0.12),
+      inset 0 1px 0 rgb(255 255 255 / 0.75);
+  }
+
+  .login-side-panel {
+    animation-delay: 80ms;
+  }
+
+  .login-alert-strip {
+    animation-delay: 180ms;
+  }
+
+  .login-wave-line {
+    animation: login-wave-drift 5.2s ease-in-out infinite;
+  }
+
+  .login-coastline,
+  .login-data-route {
+    animation: login-route-flow 7s linear infinite;
+  }
+
+  .login-wave-line-delay {
+    animation-delay: 1.4s;
+  }
+
+  .login-marker-ping {
+    animation: login-marker-breathe 2.1s ease-in-out infinite;
+  }
+
+  .login-scan-bar {
+    animation: login-scan-progress 3.8s ease-in-out infinite;
+  }
+
+  .login-spark-line {
+    stroke-dasharray: 300;
+    animation: login-spark-flow 4.5s ease-in-out infinite;
+  }
+
+  .login-float-card,
+  .login-role-chip,
+  .login-float-row {
+    animation: login-soft-enter 420ms ease-out both;
+  }
+
+  .login-float-row:nth-child(2) {
+    animation-delay: 90ms;
+  }
+
+  .login-float-row:nth-child(3) {
+    animation-delay: 180ms;
+  }
+
+  .login-form-side {
+    background:
+      linear-gradient(90deg, rgb(15 23 42 / 0.045) 1px, transparent 1px),
+      linear-gradient(0deg, rgb(15 23 42 / 0.04) 1px, transparent 1px),
+      linear-gradient(135deg, transparent 0%, rgb(14 116 144 / 0.045) 48%, transparent 48.5%),
+      var(--background);
+    background-size:
+      40px 40px,
+      40px 40px,
+      100% 100%,
+      auto;
+  }
+
+  .login-auth-card {
+    animation: login-panel-glow 5.5s ease-in-out infinite;
+  }
+}
+
+/* === Estate Map (Leaflet) — tema gelap peatland === */
+.peat-map.leaflet-container {
+  background: #0c1612;
+  font-family: var(--font-sans);
+}
+
+.peat-map .leaflet-control-zoom {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.4);
+}
+
+.peat-map .leaflet-control-zoom a {
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(4px);
+}
+
+.peat-map .leaflet-control-zoom a:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.peat-map .leaflet-control-attribution {
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 9px;
+}
+
+.peat-map .leaflet-control-attribution a {
+  color: rgba(110, 200, 160, 0.7);
+}
+
+.peat-map .leaflet-tooltip {
+  background: #10201a;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 6px;
+  font-size: 11px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.45);
+}
+
+.peat-map .leaflet-tooltip-top::before {
+  border-top-color: rgba(255, 255, 255, 0.14);
+}
+
+.peat-block-label span {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.9);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
