@@ -1,18 +1,23 @@
 "use client"
 
 import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { CalendarIcon, ChevronDownIcon, CloudRainIcon, LogOutIcon, SettingsIcon, UserIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { useSession } from "@/components/session-provider"
 import { logout } from "@/lib/auth/client"
 import { dashboardMeta } from "@/lib/peatland/mock-data"
+import {
+  DATE_RANGE_OPTIONS,
+  DIVISION_OPTIONS,
+  ESTATE_OPTIONS,
+} from "@/lib/peatland/filter-logic"
+import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
 
-const ESTATES = ["Sei Galuh Estate", "Sungai Rokan Estate", "Kampar Estate", "Indragiri Estate"]
-const DIVISIONS = ["Block A", "Block B", "Block C", "Block D", "Block E"]
-const DATE_RANGES = ["Hari ini", "7 hari terakhir", "9 - 10 Sep 2024", "Bulan ini", "Kuartal ini"]
+// Halaman yang tidak menampilkan filter Estate/Division/Date di header.
+const HIDE_FILTERS_ON = ["/settings", "/reports", "/map-view", "/alerts"]
 
 function MenuShell({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
   if (!open) return null
@@ -78,10 +83,11 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
   const displayName = user?.name ?? m.user.name
   const displayRole = user?.role ?? m.user.role
   const [loggingOut, setLoggingOut] = useState(false)
-  const [estate, setEstate] = useState(m.estate)
-  const [division, setDivision] = useState(m.division)
-  const [dateRange, setDateRange] = useState(m.dateRange)
+  const pathname = usePathname() ?? "/"
+  const { estate, division, dateRange, setEstate, setDivision, setDateRange } = useDashboardFilters()
   const [profileOpen, setProfileOpen] = useState(false)
+
+  const showFilters = !HIDE_FILTERS_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-white/5 px-5 py-3">
@@ -90,28 +96,15 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
         {subtitle ? <p className="text-[12px] text-emerald-400/80">{subtitle}</p> : null}
       </div>
 
-      <Selector
-        label="Estate"
-        value={estate}
-        options={ESTATES}
-        onSelect={(v) => {
-          setEstate(v)
-          toast.success(`Estate diubah ke ${v}`)
-        }}
-      />
-      <Selector
-        label="Division"
-        value={division}
-        options={DIVISIONS}
-        onSelect={(v) => {
-          setDivision(v)
-          toast.success(`Division diubah ke ${v}`)
-        }}
-      />
-
-      <div className="relative">
-        <DateButton value={dateRange} onSelect={(v) => { setDateRange(v); toast(`Rentang: ${v}`) }} />
-      </div>
+      {showFilters && (
+        <>
+          <Selector label="Estate" value={estate} options={ESTATE_OPTIONS} onSelect={setEstate} />
+          <Selector label="Division" value={division} options={DIVISION_OPTIONS} onSelect={setDivision} />
+          <div className="relative">
+            <DateButton value={dateRange} onSelect={setDateRange} />
+          </div>
+        </>
+      )}
 
       <div className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5">
         <CloudRainIcon className="size-5 text-sky-400" />
@@ -188,7 +181,7 @@ function DateButton({ value, onSelect }: { value: string; onSelect: (v: string) 
         <ChevronDownIcon className={cn("size-3.5 text-white/40 transition-transform", open && "rotate-180")} />
       </button>
       <MenuShell open={open} onClose={() => setOpen(false)}>
-        {DATE_RANGES.map((opt) => (
+        {DATE_RANGE_OPTIONS.map((opt) => (
           <button
             key={opt}
             onClick={() => {

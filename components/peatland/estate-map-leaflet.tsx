@@ -1,12 +1,12 @@
 "use client"
 
-import { useEffect } from "react"
+import { Fragment, useEffect } from "react"
 import L from "leaflet"
 import {
-  CircleMarker,
   GeoJSON,
   MapContainer,
   Marker,
+  Polyline,
   TileLayer,
   Tooltip,
   ZoomControl,
@@ -14,7 +14,8 @@ import {
 } from "react-leaflet"
 
 import { lahanGambut } from "@/lib/peatland/lahan-gambut"
-import { blockPoints, markerPoints, type MarkerKind } from "@/lib/peatland/map-points"
+import { blockPoints, canalLines, markerPoints, type MarkerKind } from "@/lib/peatland/map-points"
+import { matchesBlock } from "@/lib/peatland/filter-logic"
 
 // Area lahan gambut nyata: Suaka Margasatwa Giam Siak Kecil (Bengkalis, Riau).
 const CENTER: [number, number] = [1.1624, 101.6885]
@@ -80,12 +81,36 @@ function blockIcon(label: string) {
   return L.divIcon({
     className: "peat-block-label",
     html: `<span>${label}</span>`,
-    iconSize: [60, 16],
-    iconAnchor: [30, 8],
+    iconSize: [84, 22],
+    iconAnchor: [42, 11],
   })
 }
 
-export default function EstateMapLeaflet() {
+// Bead stasiun: lingkaran mengilap dengan glow sesuai status; status genting
+// (critical/offline) mendapat cincin denyut. Lihat .peat-marker di globals.css.
+function stationIcon(kind: MarkerKind) {
+  const pulse = kind === "critical" || kind === "offline"
+  return L.divIcon({
+    className: "peat-marker-icon",
+    html: `<span class="peat-marker${pulse ? " peat-marker--pulse" : ""}" style="--mk:${markerColor[kind]}"></span>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    tooltipAnchor: [0, -6],
+  })
+}
+
+// Peta menerima peta visibilitas layer (key → boolean). Layer yang tidak ada di
+// objek dianggap tampil (true), agar pemakaian tanpa prop tetap menampilkan semua.
+export default function EstateMapLeaflet({
+  layers,
+  division,
+}: {
+  layers?: Record<string, boolean>
+  division?: string
+}) {
+  const isVisible = (key: string) => layers?.[key] ?? true
+  const inBlock = (block: string) => matchesBlock(block, division ?? "")
+
   return (
     <MapContainer
       center={CENTER}
@@ -120,30 +145,39 @@ export default function EstateMapLeaflet() {
         }}
       />
 
-      {/* Label block — di dalam polygon */}
-      {blockPoints.map((b, i) => (
-        <Marker key={`blk-${i}`} position={[b.lat, b.lng]} icon={blockIcon(b.label)} interactive={false} />
-      ))}
+      {/* Jaringan kanal — layer "canal" (halo lembut + garis putus mengilap) */}
+      {isVisible("canal") &&
+        canalLines.map((seg, i) => (
+          <Fragment key={`canal-${i}`}>
+            <Polyline
+              positions={seg}
+              pathOptions={{ color: "#0ea5e9", weight: 7, opacity: 0.14, lineCap: "round", lineJoin: "round" }}
+            />
+            <Polyline
+              positions={seg}
+              pathOptions={{ color: "#7dd3fc", weight: 2, opacity: 0.9, dashArray: "1 7", lineCap: "round" }}
+            />
+          </Fragment>
+        ))}
 
-      {/* Titik stasiun — di dalam polygon */}
-      {markerPoints.map((m) => (
-        <CircleMarker
-          key={m.id}
-          center={[m.lat, m.lng]}
-          radius={7}
-          pathOptions={{
-            color: "#ffffff",
-            weight: 1.5,
-            opacity: 0.85,
-            fillColor: markerColor[m.kind],
-            fillOpacity: 0.95,
-          }}
-        >
-          <Tooltip direction="top" offset={[0, -6]}>
-            <span style={{ fontWeight: 600 }}>{m.id.toUpperCase()}</span> — {markerLabel[m.kind]}
-          </Tooltip>
-        </CircleMarker>
-      ))}
+      {/* Label block — layer "plantation-block", difilter per division */}
+      {isVisible("plantation-block") &&
+        blockPoints
+          .filter((b) => inBlock(b.label))
+          .map((b, i) => (
+            <Marker key={`blk-${i}`} position={[b.lat, b.lng]} icon={blockIcon(b.label)} interactive={false} />
+          ))}
+
+      {/* Titik stasiun — difilter per layer aset & division */}
+      {markerPoints
+        .filter((m) => isVisible(m.layer) && inBlock(m.block))
+        .map((m) => (
+          <Marker key={m.id} position={[m.lat, m.lng]} icon={stationIcon(m.kind)}>
+            <Tooltip direction="top" offset={[0, -6]}>
+              <span style={{ fontWeight: 600 }}>{m.id.toUpperCase()}</span> — {markerLabel[m.kind]}
+            </Tooltip>
+          </Marker>
+        ))}
     </MapContainer>
   )
 }

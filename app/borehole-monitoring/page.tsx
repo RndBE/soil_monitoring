@@ -34,6 +34,8 @@ import { toast } from "sonner"
 
 import { Panel, ViewAll } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
 type Tone = "normal" | "warning" | "critical" | "info" | "offline"
@@ -203,6 +205,7 @@ const sparkColor: Record<Tone, string> = {
 type Borehole = {
   id: string
   block: string
+  division: string
   level: number
   battery: number
   signal: string
@@ -211,14 +214,14 @@ type Borehole = {
 }
 
 const initialBoreholes: Borehole[] = [
-  { id: "BH-01", block: "Block A-12", level: -31, battery: 92, signal: "Good", status: "warning", trend: [-28, -30, -31] },
-  { id: "BH-02", block: "Block A-14", level: -26, battery: 88, signal: "Good", status: "normal", trend: [-24, -25, -26] },
-  { id: "BH-03", block: "Block B-03", level: -28, battery: 95, signal: "Good", status: "normal", trend: [-27, -28, -28] },
-  { id: "BH-04", block: "Block B-07", level: -33, battery: 71, signal: "Fair", status: "warning", trend: [-30, -32, -33] },
-  { id: "BH-05", block: "Block C-01", level: -24, battery: 90, signal: "Good", status: "normal", trend: [-23, -24, -24] },
-  { id: "BH-07", block: "Block C-09", level: -62, battery: 58, signal: "Weak", status: "critical", trend: [-54, -58, -62] },
-  { id: "BH-09", block: "Block D-04", level: -25, battery: 96, signal: "Good", status: "normal", trend: [-26, -25, -25] },
-  { id: "BH-12", block: "Block D-11", level: -42, battery: 64, signal: "Fair", status: "warning", trend: [-38, -40, -42] },
+  { id: "BH-01", block: "Block A-12", division: "Block A", level: -31, battery: 92, signal: "Good", status: "warning", trend: [-28, -30, -31] },
+  { id: "BH-02", block: "Block A-14", division: "Block A", level: -26, battery: 88, signal: "Good", status: "normal", trend: [-24, -25, -26] },
+  { id: "BH-03", block: "Block B-03", division: "Block B", level: -28, battery: 95, signal: "Good", status: "normal", trend: [-27, -28, -28] },
+  { id: "BH-04", block: "Block B-07", division: "Block B", level: -33, battery: 71, signal: "Fair", status: "warning", trend: [-30, -32, -33] },
+  { id: "BH-05", block: "Block C-01", division: "Block C", level: -24, battery: 90, signal: "Good", status: "normal", trend: [-23, -24, -24] },
+  { id: "BH-07", block: "Block C-09", division: "Block C", level: -62, battery: 58, signal: "Weak", status: "critical", trend: [-54, -58, -62] },
+  { id: "BH-09", block: "Block D-04", division: "Block D", level: -25, battery: 96, signal: "Good", status: "normal", trend: [-26, -25, -25] },
+  { id: "BH-12", block: "Block D-11", division: "Block E", level: -42, battery: 64, signal: "Fair", status: "warning", trend: [-38, -40, -42] },
 ]
 
 const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35"
@@ -236,6 +239,7 @@ const FILTERS: { key: StatusFilter; label: string }[] = [
 ]
 
 export default function BoreholeMonitoringPage() {
+  const { estate, division } = useDashboardFilters()
   const [range, setRange] = useState(RANGE_OPTIONS[0])
   const [rangeOpen, setRangeOpen] = useState(false)
   const [showTargets, setShowTargets] = useState(true)
@@ -243,8 +247,22 @@ export default function BoreholeMonitoringPage() {
   const [rows, setRows] = useState<Borehole[]>(initialBoreholes)
 
   const visibleRows = useMemo(
-    () => (filter === "all" ? rows : rows.filter((r) => r.status === filter)),
-    [filter, rows]
+    () =>
+      rows.filter(
+        (r) => matchesBlock(r.division, division) && (filter === "all" || r.status === filter)
+      ),
+    [filter, rows, division]
+  )
+
+  const stats = useMemo(
+    () => ({
+      avgWaterTable: scaleNumericString("-35", estate),
+      deepest: scaleNumericString("-62", estate),
+      withinTarget: scaleNumericString("64", estate),
+      activeBoreholes: `${scaleNumber(48, estate)}/${scaleNumber(52, estate)}`,
+      avgBattery: scaleNumericString("87", estate),
+    }),
+    [estate]
   )
 
   function refresh() {
@@ -313,12 +331,12 @@ export default function BoreholeMonitoringPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Avg Water Table" value="-35" unit="cm" tone="warning" icon={WavesIcon} delta="3 cm" deltaDir="down" deltaTone="bad" />
+        <StatTile label="Avg Water Table" value={stats.avgWaterTable} unit="cm" tone="warning" icon={WavesIcon} delta="3 cm" deltaDir="down" deltaTone="bad" />
         <StatTile label="Boreholes Critical" value="3" tone="critical" icon={ActivityIcon} delta="1" deltaDir="up" deltaTone="bad" />
-        <StatTile label="Deepest" value="-62" unit="cm" tone="critical" icon={GaugeIcon} />
-        <StatTile label="Within Target" value="64" unit="%" tone="warning" icon={TargetIcon} delta="5%" deltaDir="down" deltaTone="bad" />
-        <StatTile label="Active Boreholes" value="48/52" tone="info" icon={RadioTowerIcon} delta="2" deltaDir="up" deltaTone="good" />
-        <StatTile label="Avg Battery" value="87" unit="%" tone="normal" icon={BatteryMediumIcon} delta="1%" deltaDir="down" deltaTone="neutral" />
+        <StatTile label="Deepest" value={stats.deepest} unit="cm" tone="critical" icon={GaugeIcon} />
+        <StatTile label="Within Target" value={stats.withinTarget} unit="%" tone="warning" icon={TargetIcon} delta="5%" deltaDir="down" deltaTone="bad" />
+        <StatTile label="Active Boreholes" value={stats.activeBoreholes} tone="info" icon={RadioTowerIcon} delta="2" deltaDir="up" deltaTone="good" />
+        <StatTile label="Avg Battery" value={stats.avgBattery} unit="%" tone="normal" icon={BatteryMediumIcon} delta="1%" deltaDir="down" deltaTone="neutral" />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -434,15 +452,22 @@ export default function BoreholeMonitoringPage() {
               </tr>
             </thead>
             <tbody>
+              {visibleRows.length === 0 && (
+                <tr className="border-t border-white/5">
+                  <td className={cn(td, "text-center text-white/40")} colSpan={8}>
+                    Tidak ada borehole di {division}
+                  </td>
+                </tr>
+              )}
               {visibleRows.map((r) => (
                 <tr
                   key={r.id}
-                  onClick={() => toast(`${r.id} • ${r.level} cm • ${statusLabel[r.status]}`)}
+                  onClick={() => toast(`${r.id} • ${scaleNumber(r.level, estate)} cm • ${statusLabel[r.status]}`)}
                   className="cursor-pointer border-t border-white/5 hover:bg-white/[0.03]"
                 >
                   <td className={cn(td, "font-medium text-white/85")}>{r.id}</td>
                   <td className={cn(td, "text-white/55")}>{r.block}</td>
-                  <td className={cn(td, valueTone[r.status], "text-right font-medium")}>{r.level} cm</td>
+                  <td className={cn(td, valueTone[r.status], "text-right font-medium")}>{scaleNumber(r.level, estate)} cm</td>
                   <td className={cn(td, "text-right")}>
                     <span className={cn("font-medium", r.battery < 60 ? "text-amber-400" : "text-white/70")}>{r.battery}%</span>
                   </td>

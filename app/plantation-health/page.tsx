@@ -34,6 +34,8 @@ import { toast } from "sonner"
 
 import { PeatShell } from "@/components/peatland/peat-shell"
 import { Panel, PanelHeader, ViewAll } from "@/components/peatland/panel"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
 type Tone = "good" | "warn" | "crit" | "info"
@@ -194,11 +196,13 @@ function TrendPill({ trend }: { trend: TrendKind }) {
 }
 
 export default function PlantationHealthPage() {
+  const { estate, division } = useDashboardFilters()
   const [ndviRange, setNdviRange] = useState<NdviRange>("6M")
   const [exportOpen, setExportOpen] = useState(false)
 
   const ndviTrend = useMemo(() => {
     const n = ndviRangeMonths[ndviRange]
+    let series: { month: string; ndvi: number }[]
     if (n >= ndviTrendFull.length) {
       // Extend backwards with synthetic earlier months for the 12M view.
       const extraMonths = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"]
@@ -207,21 +211,65 @@ export default function PlantationHealthPage() {
         .slice(0, n - ndviTrendFull.length)
         .map((month, i) => ({ month, ndvi: Number((base - (i + 1) * 0.015).toFixed(2)) }))
         .reverse()
-      return [...head, ...ndviTrendFull]
+      series = [...head, ...ndviTrendFull]
+    } else {
+      series = ndviTrendFull.slice(ndviTrendFull.length - n)
     }
-    return ndviTrendFull.slice(ndviTrendFull.length - n)
-  }, [ndviRange])
+    // Scale NDVI series per estate; NDVI must stay ≤ 1.0.
+    return series.map((d) => ({ ...d, ndvi: Math.min(1, scaleNumber(d.ndvi, estate, 2)) }))
+  }, [ndviRange, estate])
+
+  // Per-block NDVI table filtered by the global division selector.
+  const visibleBlockRows = useMemo(
+    () => blockRows.filter((r) => matchesBlock(r.block, division)),
+    [division]
+  )
+
+  // Yield-by-block chart filtered by division (single-letter label → "Block X").
+  const visibleYieldByBlock = useMemo(
+    () => yieldByBlock.filter((d) => matchesBlock(`Block ${d.block}`, division)),
+    [division]
+  )
 
   const exportFormats = ["PDF", "Excel", "CSV"] as const
 
   return (
     <PeatShell title="Plantation Health" subtitle="Vegetation Index (NDVI) & Crop Health">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Avg NDVI" value="0.66" tone="good" icon={LeafIcon} delta="+0.01" deltaDir="up" />
-        <StatTile label="Healthy Area" value="72" unit="%" tone="good" icon={SproutIcon} delta="+2%" deltaDir="up" />
+        <StatTile
+          label="Avg NDVI"
+          value={Math.min(1, scaleNumber(0.66, estate, 2)).toFixed(2)}
+          tone="good"
+          icon={LeafIcon}
+          delta="+0.01"
+          deltaDir="up"
+        />
+        <StatTile
+          label="Healthy Area"
+          value={scaleNumericString("72", estate)}
+          unit="%"
+          tone="good"
+          icon={SproutIcon}
+          delta="+2%"
+          deltaDir="up"
+        />
         <StatTile label="Blocks at Risk" value="1" tone="warn" icon={TriangleAlertIcon} delta="0" deltaDir="flat" />
-        <StatTile label="Total Area" value="6,110" unit="ha" tone="info" icon={MapIcon} />
-        <StatTile label="Avg Yield" value="21.4" unit="t/ha" tone="good" icon={ActivityIcon} delta="+0.3" deltaDir="up" />
+        <StatTile
+          label="Total Area"
+          value={scaleNumber(6110, estate).toLocaleString()}
+          unit="ha"
+          tone="info"
+          icon={MapIcon}
+        />
+        <StatTile
+          label="Avg Yield"
+          value={scaleNumericString("21.4", estate)}
+          unit="t/ha"
+          tone="good"
+          icon={ActivityIcon}
+          delta="+0.3"
+          deltaDir="up"
+        />
         <StatTile label="Last Satellite Pass" value="10 Sep" tone="info" icon={SatelliteIcon} />
       </div>
 
@@ -364,13 +412,13 @@ export default function PlantationHealthPage() {
           />
           <div className="h-[200px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={yieldByBlock} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+              <BarChart data={visibleYieldByBlock} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
                 <XAxis dataKey="block" {...axisProps} />
                 <YAxis domain={[0, 28]} {...axisProps} width={28} ticks={[0, 7, 14, 21, 28]} />
                 <Tooltip {...tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
                 <Bar dataKey="yield" name="Yield (t/ha)" radius={[4, 4, 0, 0]} barSize={40}>
-                  {yieldByBlock.map((d) => (
+                  {visibleYieldByBlock.map((d) => (
                     <Cell key={d.block} fill={d.color} />
                   ))}
                 </Bar>
@@ -400,34 +448,47 @@ export default function PlantationHealthPage() {
               </tr>
             </thead>
             <tbody>
-              {blockRows.map((r) => (
-                <tr
-                  key={r.block}
-                  onClick={() => toast(`${r.block} · NDVI ${r.ndvi.toFixed(2)} · ${r.health}`)}
-                  className="cursor-pointer border-t border-white/5 hover:bg-white/[0.03]"
-                >
-                  <td className={cn(td, "font-medium text-white/85")}>{r.block}</td>
-                  <td className={cn(td, "font-medium text-white/80")}>{r.ndvi.toFixed(2)}</td>
-                  <td className={td}>
-                    <div className="flex items-center gap-2">
-                      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
-                        <div
-                          className={cn("h-full rounded-full", ndviBar[r.healthTone])}
-                          style={{ width: `${r.ndvi * 100}%` }}
-                        />
-                      </div>
-                      <span className={cn("text-[11.5px] font-medium", ndviText[r.healthTone])}>{r.health}</span>
-                    </div>
-                  </td>
-                  <td className={cn(td, "text-right text-white/70")}>{r.area.toLocaleString()}</td>
-                  <td className={cn(td, "text-right text-white/70")}>{r.crop.toFixed(1)}</td>
-                  <td className={cn(td, "text-right")}>
-                    <div className="flex justify-end">
-                      <TrendPill trend={r.trend} />
-                    </div>
+              {visibleBlockRows.length === 0 ? (
+                <tr className="border-t border-white/5">
+                  <td className={cn(td, "text-center text-white/40")} colSpan={6}>
+                    Tidak ada blok di {division}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                visibleBlockRows.map((r) => {
+                  const ndvi = Math.min(1, scaleNumber(r.ndvi, estate, 2))
+                  return (
+                    <tr
+                      key={r.block}
+                      onClick={() => toast(`${r.block} · NDVI ${ndvi.toFixed(2)} · ${r.health}`)}
+                      className="cursor-pointer border-t border-white/5 hover:bg-white/[0.03]"
+                    >
+                      <td className={cn(td, "font-medium text-white/85")}>{r.block}</td>
+                      <td className={cn(td, "font-medium text-white/80")}>{ndvi.toFixed(2)}</td>
+                      <td className={td}>
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
+                            <div
+                              className={cn("h-full rounded-full", ndviBar[r.healthTone])}
+                              style={{ width: `${ndvi * 100}%` }}
+                            />
+                          </div>
+                          <span className={cn("text-[11.5px] font-medium", ndviText[r.healthTone])}>{r.health}</span>
+                        </div>
+                      </td>
+                      <td className={cn(td, "text-right text-white/70")}>
+                        {scaleNumber(r.area, estate).toLocaleString()}
+                      </td>
+                      <td className={cn(td, "text-right text-white/70")}>{scaleNumber(r.crop, estate, 1).toFixed(1)}</td>
+                      <td className={cn(td, "text-right")}>
+                        <div className="flex justify-end">
+                          <TrendPill trend={r.trend} />
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </Panel>

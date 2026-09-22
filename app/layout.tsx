@@ -7,6 +7,7 @@ import { SessionProvider } from "@/components/session-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { getSessionUser } from "@/lib/auth/server";
+import { DashboardFiltersProvider } from "@/lib/peatland/filters";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -31,7 +32,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <html lang="id" className={geist.variable}>
       <body>
         <SessionProvider user={user}>
-          <TooltipProvider>{children}</TooltipProvider>
+          <DashboardFiltersProvider>
+            <TooltipProvider>{children}</TooltipProvider>
+          </DashboardFiltersProvider>
         </SessionProvider>
         <Toaster position="top-right" richColors closeButton />
       </body>

@@ -28,6 +28,8 @@ import { toast } from "sonner"
 
 import { PeatShell } from "@/components/peatland/peat-shell"
 import { Panel, ViewAll } from "@/components/peatland/panel"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
 const axisProps = {
@@ -158,6 +160,7 @@ const fwiComponents = [
 type Hotspot = {
   id: string
   block: string
+  division: string
   coords: string
   confidence: string
   confTone: Tone
@@ -171,6 +174,7 @@ const initialHotspots: Hotspot[] = [
   {
     id: "HS-01",
     block: "Blok C-14",
+    division: "Block C",
     coords: "0.342°S, 102.118°E",
     confidence: "High",
     confTone: "critical",
@@ -182,6 +186,7 @@ const initialHotspots: Hotspot[] = [
   {
     id: "HS-02",
     block: "Blok D-07",
+    division: "Block D",
     coords: "0.355°S, 102.131°E",
     confidence: "Nominal",
     confTone: "warning",
@@ -193,6 +198,7 @@ const initialHotspots: Hotspot[] = [
   {
     id: "HS-03",
     block: "Blok A-22",
+    division: "Block A",
     coords: "0.318°S, 102.094°E",
     confidence: "High",
     confTone: "critical",
@@ -204,6 +210,7 @@ const initialHotspots: Hotspot[] = [
   {
     id: "HS-04",
     block: "Blok B-03",
+    division: "Block B",
     coords: "0.371°S, 102.149°E",
     confidence: "Low",
     confTone: "info",
@@ -215,6 +222,7 @@ const initialHotspots: Hotspot[] = [
   {
     id: "HS-05",
     block: "Blok E-11",
+    division: "Block E",
     coords: "0.329°S, 102.107°E",
     confidence: "Nominal",
     confTone: "warning",
@@ -237,18 +245,35 @@ function StatusPill({ tone, label }: { tone: Tone; label: string }) {
 }
 
 export default function FireRiskPage() {
-  const riskScore = 82
+  const { estate, division } = useDashboardFilters()
+
+  // Fire Risk Index adalah skala 0–100, jadi clamp setelah scaling per estate.
+  const riskScore = Math.min(100, scaleNumber(82, estate))
 
   const [trendRange, setTrendRange] = useState(TREND_RANGES[0])
   const [rangeOpen, setRangeOpen] = useState(false)
-  const fireRiskTrend = trendData[trendRange]
+  // Skala deret tren per estate; index tetap dibatasi 0–100 agar Y-axis aman.
+  const fireRiskTrend = useMemo(
+    () => trendData[trendRange].map((d) => ({ ...d, value: Math.min(100, scaleNumber(d.value, estate)) })),
+    [trendRange, estate]
+  )
+
+  // Komponen FWI juga index 0–100 — clamp agar bar tidak melebihi domain.
+  const scaledFwiComponents = useMemo(
+    () => fwiComponents.map((c) => ({ ...c, value: Math.min(100, scaleNumber(c.value, estate)) })),
+    [estate]
+  )
+  const fwiValue = scaledFwiComponents.find((c) => c.code === "FWI")?.value ?? 0
 
   const [hotspots, setHotspots] = useState<Hotspot[]>(initialHotspots)
   const [confFilter, setConfFilter] = useState(CONFIDENCE_FILTERS[0])
 
   const visibleHotspots = useMemo(
-    () => (confFilter === "All" ? hotspots : hotspots.filter((h) => h.confidence === confFilter)),
-    [hotspots, confFilter]
+    () =>
+      hotspots.filter(
+        (h) => matchesBlock(h.division, division) && (confFilter === "All" || h.confidence === confFilter)
+      ),
+    [hotspots, confFilter, division]
   )
 
   function setHotspotStatus(id: string, status: string, statusTone: Tone, message: string) {
@@ -264,12 +289,12 @@ export default function FireRiskPage() {
   return (
     <PeatShell title="Fire Risk" subtitle="Fire Danger & Hotspot Monitoring">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Fire Risk Index" value="82" unit="High" tone="critical" icon={FlameIcon} status="Critical" delta="+3 pts" />
-        <StatTile label="Active Hotspots" value="4" tone="critical" icon={MapPinIcon} status="Above threshold" delta="+2" />
-        <StatTile label="Days Since Rain" value="2" unit="days" tone="warning" icon={CloudRainIcon} status="Drying out" delta="+1 day" />
+        <StatTile label="Fire Risk Index" value={String(riskScore)} unit="High" tone="critical" icon={FlameIcon} status="Critical" delta="+3 pts" />
+        <StatTile label="Active Hotspots" value={scaleNumericString("4", estate)} tone="critical" icon={MapPinIcon} status="Above threshold" delta="+2" />
+        <StatTile label="Days Since Rain" value={scaleNumericString("2", estate)} unit="days" tone="warning" icon={CloudRainIcon} status="Drying out" delta="+1 day" />
         <StatTile label="FDRS Level" value="High" tone="critical" icon={GaugeIcon} status="Danger" delta="Was Medium" />
-        <StatTile label="Ground Water" value="-35" unit="cm" tone="warning" icon={WavesIcon} status="Below target" delta="-4 cm" />
-        <StatTile label="Patrols Active" value="6" tone="normal" icon={ShieldCheckIcon} status="On duty" delta="+1 team" />
+        <StatTile label="Ground Water" value={scaleNumericString("-35", estate)} unit="cm" tone="warning" icon={WavesIcon} status="Below target" delta="-4 cm" />
+        <StatTile label="Patrols Active" value={scaleNumericString("6", estate)} tone="normal" icon={ShieldCheckIcon} status="On duty" delta="+1 team" />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -337,17 +362,17 @@ export default function FireRiskPage() {
               <h3 className="text-[14px] font-semibold text-white">Fire Weather Index Components</h3>
               <p className="text-[11px] text-white/40">Canadian FWI System (today)</p>
             </div>
-            <span className="text-[11px] font-medium text-white/40">FWI 38</span>
+            <span className="text-[11px] font-medium text-white/40">FWI {fwiValue}</span>
           </div>
           <div className="h-[200px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={fwiComponents} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+              <BarChart data={scaledFwiComponents} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
                 <XAxis dataKey="code" {...axisProps} />
                 <YAxis domain={[0, 100]} {...axisProps} width={28} ticks={[0, 25, 50, 75, 100]} />
                 <Tooltip {...tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
                 <Bar dataKey="value" name="Index" radius={[3, 3, 0, 0]} barSize={30}>
-                  {fwiComponents.map((c) => (
+                  {scaledFwiComponents.map((c) => (
                     <Cell key={c.code} fill={c.fill} />
                   ))}
                 </Bar>
@@ -477,7 +502,9 @@ export default function FireRiskPage() {
               {visibleHotspots.length === 0 && (
                 <tr className="border-t border-white/5">
                   <td className={cn(td, "text-center text-white/40")} colSpan={8}>
-                    Tidak ada titik panas untuk filter ini
+                    {division === "All Blocks"
+                      ? "Tidak ada titik panas untuk filter ini"
+                      : `Tidak ada data di ${division}`}
                   </td>
                 </tr>
               )}

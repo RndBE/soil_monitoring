@@ -32,6 +32,8 @@ import { toast } from "sonner"
 
 import { Panel, PanelHeader, ViewAll } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
 const axisProps = {
@@ -206,25 +208,42 @@ const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-whi
 const td = "px-3 py-2 text-[12px]"
 
 export default function PeatMonitoringPage() {
+  const { estate, division } = useDashboardFilters()
   const [moistureRange, setMoistureRange] = useState(moistureRanges[0])
   const [rangeOpen, setRangeOpen] = useState(false)
   const [activeBlock, setActiveBlock] = useState(blockFilters[0])
   const [stations] = useState(initialStations)
 
+  // Global division filter (header) berlaku lebih dulu, lalu filter blok lokal.
   const visibleStations = useMemo(
-    () => (activeBlock === "Semua" ? stations : stations.filter((s) => s.block === activeBlock)),
-    [activeBlock, stations],
+    () =>
+      stations.filter(
+        (s) => matchesBlock(s.block, division) && (activeBlock === "Semua" || s.block === activeBlock),
+      ),
+    [activeBlock, division, stations],
+  )
+
+  // KPI tiles diskalakan per estate supaya angka ikut berubah saat estate diganti.
+  const kpi = useMemo(
+    () => ({
+      depth: scaleNumericString("305", estate),
+      moisture: scaleNumericString("61", estate),
+      temp: scaleNumericString("28.3", estate),
+      stationsReporting: `${scaleNumber(42, estate)}/45`,
+      co2: scaleNumericString("4.8", estate),
+    }),
+    [estate],
   )
 
   return (
     <PeatShell title="Peat Monitoring" subtitle="Soil & Peat Condition — Stations Overview">
       {/* KPI ROW */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Avg Peat Depth" value="305" unit="cm" tone="normal" icon={LayersIcon} delta="3 cm" deltaDir="up" deltaTone="good" />
-        <StatTile label="Avg Soil Moisture" value="61" unit="%" tone="normal" icon={DropletsIcon} delta="2%" deltaDir="up" deltaTone="good" />
-        <StatTile label="Avg Soil Temp" value="28.3" unit="°C" tone="info" icon={ThermometerIcon} delta="0.4°C" deltaDir="up" deltaTone="neutral" />
-        <StatTile label="Stations Reporting" value="42/45" tone="warning" icon={RadioTowerIcon} delta="1" deltaDir="down" deltaTone="bad" />
-        <StatTile label="CO2 Flux" value="4.8" unit="t/ha/yr" tone="warning" icon={FactoryIcon} delta="0.2" deltaDir="up" deltaTone="bad" />
+        <StatTile label="Avg Peat Depth" value={kpi.depth} unit="cm" tone="normal" icon={LayersIcon} delta="3 cm" deltaDir="up" deltaTone="good" />
+        <StatTile label="Avg Soil Moisture" value={kpi.moisture} unit="%" tone="normal" icon={DropletsIcon} delta="2%" deltaDir="up" deltaTone="good" />
+        <StatTile label="Avg Soil Temp" value={kpi.temp} unit="°C" tone="info" icon={ThermometerIcon} delta="0.4°C" deltaDir="up" deltaTone="neutral" />
+        <StatTile label="Stations Reporting" value={kpi.stationsReporting} tone="warning" icon={RadioTowerIcon} delta="1" deltaDir="down" deltaTone="bad" />
+        <StatTile label="CO2 Flux" value={kpi.co2} unit="t/ha/yr" tone="warning" icon={FactoryIcon} delta="0.2" deltaDir="up" deltaTone="bad" />
         <StatTile label="GHG Status" value="Moderate" tone="warning" icon={ActivityIcon} />
       </div>
 
@@ -431,7 +450,9 @@ export default function PeatMonitoringPage() {
               {visibleStations.length === 0 && (
                 <tr className="border-t border-white/5">
                   <td className={cn(td, "text-center text-white/40")} colSpan={7}>
-                    Tidak ada stasiun untuk filter ini
+                    {division === "All Blocks"
+                      ? "Tidak ada stasiun untuk filter ini"
+                      : `Tidak ada data di ${division}`}
                   </td>
                 </tr>
               )}

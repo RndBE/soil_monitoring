@@ -78,15 +78,16 @@ function StatTile({
   )
 }
 
+// key selaras dengan layer aset di EstateMap / map-points (lihat [[map-points]]).
 const layers = [
-  { name: "Borehole", color: "#38bdf8", count: 34 },
-  { name: "Water Table Station", color: "#22c55e", count: 28 },
-  { name: "Rain Gauge", color: "#84cc16", count: 12 },
-  { name: "Water Gate", color: "#fb923c", count: 9 },
-  { name: "Canal", color: "#64748b", count: 22 },
-  { name: "Peat Monitoring Station", color: "#f59e0b", count: 18 },
-  { name: "Fire Hotspot", color: "#ef4444", count: 4 },
-  { name: "Plantation Block", color: "#a3e635", count: 12 },
+  { key: "borehole", name: "Borehole", color: "#38bdf8", count: 34 },
+  { key: "water-station", name: "Water Table Station", color: "#22c55e", count: 28 },
+  { key: "rain-gauge", name: "Rain Gauge", color: "#84cc16", count: 12 },
+  { key: "water-gate", name: "Water Gate", color: "#fb923c", count: 9 },
+  { key: "canal", name: "Canal", color: "#64748b", count: 22 },
+  { key: "peat-station", name: "Peat Monitoring Station", color: "#f59e0b", count: 18 },
+  { key: "fire-hotspot", name: "Fire Hotspot", color: "#ef4444", count: 4 },
+  { key: "plantation-block", name: "Plantation Block", color: "#a3e635", count: 12 },
 ]
 
 const statusBreakdown = [
@@ -149,15 +150,19 @@ type StatusFilter = (typeof statusFilters)[number]["key"]
 export default function MapViewPage() {
   const totalMarkers = statusBreakdown.reduce((sum, s) => sum + s.count, 0)
 
-  // Layer legend visibility (checkbox-like toggle per layer)
-  const [hiddenLayers, setHiddenLayers] = useState<Record<string, boolean>>({})
+  // Visibilitas layer — sumber kebenaran tunggal yang mengendalikan peta (EstateMap)
+  // sekaligus tampilan Layer Legend di sidebar. true = tampil.
+  const [visibleLayers, setVisibleLayers] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(layers.map((l) => [l.key, true]))
+  )
+  const activeLayerCount = layers.filter((l) => visibleLayers[l.key]).length
 
-  const toggleLayer = (name: string) => {
-    setHiddenLayers((prev) => {
-      const next = { ...prev, [name]: !prev[name] }
-      toast(next[name] ? `Lapisan disembunyikan: ${name}` : `Lapisan ditampilkan: ${name}`)
-      return next
-    })
+  const toggleLayer = (key: string) => {
+    setVisibleLayers((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const toggleAllLayers = (target: boolean) => {
+    setVisibleLayers(Object.fromEntries(layers.map((l) => [l.key, target])))
   }
 
   // Station directory: filter + sync feedback
@@ -188,36 +193,35 @@ export default function MapViewPage() {
         <StatTile label="Total Stations" value="139" icon={RadioTowerIcon} tone="info" delta="across 12 blocks" />
         <StatTile label="Online" value="128" icon={ActivityIcon} tone="normal" delta="92.1% uptime" />
         <StatTile label="Offline" value="11" icon={WifiOffIcon} tone="critical" delta="needs attention" />
-        <StatTile label="Layers Active" value="8" icon={LayersIcon} tone="info" delta="of 8 layers" />
+        <StatTile label="Layers Active" value={String(activeLayerCount)} icon={LayersIcon} tone="info" delta={`of ${layers.length} layers`} />
         <StatTile label="Area Monitored" value="5,110" unit="ha" icon={MapPinnedIcon} tone="normal" delta="estate coverage" />
         <StatTile label="Last Sync" value="2 min" unit="ago" icon={ClockIcon} tone="normal" delta="auto every 5 min" />
       </div>
 
       {/* Main map row */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
-        <Panel className="overflow-hidden">
-          <PanelHeader
+        <div className="h-[520px]">
+          <EstateMap
             title="Estate Asset Map"
             subtitle="Live sensor & infrastructure positions"
-            action={<ViewAll label="Export" onClick={() => toast.info("Mengekspor peta…")} />}
+            headerAction={<ViewAll label="Export" onClick={() => toast.info("Mengekspor peta…")} />}
+            layers={visibleLayers}
+            onToggleLayer={toggleLayer}
+            onToggleAll={toggleAllLayers}
+            showLayerPanel={false}
           />
-          <div className="h-[480px] px-4 pb-4">
-            <div className="h-full overflow-hidden rounded-lg ring-1 ring-white/5">
-              <EstateMap />
-            </div>
-          </div>
-        </Panel>
+        </div>
 
         <div className="grid grid-cols-1 gap-4">
           <Panel>
             <PanelHeader title="Layer Legend" subtitle="Visible map layers" />
             <div className="flex flex-col gap-0.5 px-2 pb-3">
               {layers.map((l) => {
-                const hidden = hiddenLayers[l.name]
+                const hidden = !visibleLayers[l.key]
                 return (
                   <button
-                    key={l.name}
-                    onClick={() => toggleLayer(l.name)}
+                    key={l.key}
+                    onClick={() => toggleLayer(l.key)}
                     className={cn(
                       "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.03]",
                       hidden && "opacity-40"

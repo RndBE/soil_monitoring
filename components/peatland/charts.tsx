@@ -15,6 +15,8 @@ import {
 } from "recharts"
 
 import { fireRiskTrend, rainfallCorrelation, waterTableTrend } from "@/lib/peatland/mock-data"
+import { scaleNumber, sliceSeries } from "@/lib/peatland/filter-logic"
+import { useDashboardFilters } from "@/lib/peatland/filters"
 import { Panel } from "./panel"
 
 const axisProps = {
@@ -50,15 +52,17 @@ function Legend({ items }: { items: { label: string; color: string; shape?: "lin
 }
 
 export function WaterTableChart() {
+  const { estate, dateRange } = useDashboardFilters()
+  const data = sliceSeries(waterTableTrend, dateRange).map((d) => ({ ...d, value: scaleNumber(d.value, estate) }))
   return (
     <Panel className="h-full">
       <div className="px-4 pb-1 pt-3.5">
-        <h3 className="text-[14px] font-semibold text-white">Water Table Trend (7 Days)</h3>
+        <h3 className="text-[14px] font-semibold text-white">Water Table Trend</h3>
         <p className="text-[11px] text-white/40">All Borehole Average</p>
       </div>
       <div className="h-[180px] px-1 pb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={waterTableTrend} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+          <ComposedChart data={data} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
             <XAxis dataKey="day" {...axisProps} />
             <YAxis domain={[-60, -10]} {...axisProps} width={34} />
@@ -86,10 +90,16 @@ export function WaterTableChart() {
 }
 
 export function RainfallCorrelationChart() {
+  const { estate, dateRange } = useDashboardFilters()
+  const data = sliceSeries(rainfallCorrelation, dateRange).map((d) => ({
+    ...d,
+    rainfall: scaleNumber(d.rainfall, estate),
+    waterTable: scaleNumber(d.waterTable, estate),
+  }))
   return (
     <Panel className="h-full">
       <div className="px-4 pb-1 pt-3.5">
-        <h3 className="text-[14px] font-semibold text-white">Rainfall &amp; Water Table Correlation (7 Days)</h3>
+        <h3 className="text-[14px] font-semibold text-white">Rainfall &amp; Water Table Correlation</h3>
       </div>
       <Legend
         items={[
@@ -99,7 +109,7 @@ export function RainfallCorrelationChart() {
       />
       <div className="h-[170px] px-1 pb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={rainfallCorrelation} margin={{ left: 0, right: 4, top: 8, bottom: 4 }}>
+          <ComposedChart data={data} margin={{ left: 0, right: 4, top: 8, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
             <XAxis dataKey="day" {...axisProps} />
             <YAxis yAxisId="left" domain={[0, 100]} {...axisProps} width={28} />
@@ -123,14 +133,16 @@ export function RainfallCorrelationChart() {
 }
 
 export function FireRiskChart() {
+  const { estate, dateRange } = useDashboardFilters()
+  const data = sliceSeries(fireRiskTrend, dateRange).map((d) => ({ ...d, value: Math.min(100, scaleNumber(d.value, estate)) }))
   return (
     <Panel className="h-full">
       <div className="px-4 pb-1 pt-3.5">
-        <h3 className="text-[14px] font-semibold text-white">Fire Risk Trend (7 Days)</h3>
+        <h3 className="text-[14px] font-semibold text-white">Fire Risk Trend</h3>
       </div>
       <div className="h-[180px] px-1 pb-2">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={fireRiskTrend} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+          <ComposedChart data={data} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
             <defs>
               <linearGradient id="fireGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#ef4444" stopOpacity={0.35} />
