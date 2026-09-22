@@ -136,7 +136,7 @@ const initialIntegrations: Integration[] = [
 ]
 
 const team = [
-  { name: "Anisa Octa N", role: "Peat Management Officer", lastActive: "Just now", status: "active" as TeamStatus },
+  { name: "Administrator", role: "Peat Management Officer", lastActive: "Just now", status: "active" as TeamStatus },
   { name: "Budi Hartono", role: "Estate Manager", lastActive: "12 min ago", status: "active" as TeamStatus },
   { name: "Rini Suswanti", role: "Hydrology Analyst", lastActive: "48 min ago", status: "away" as TeamStatus },
   { name: "Dedi Kurniawan", role: "Fire Response Lead", lastActive: "3 hours ago", status: "away" as TeamStatus },
@@ -157,8 +157,8 @@ type ToggleKey = "critical" | "dailyEmail" | "fireSms" | "weekly" | "maintenance
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState({
-    fullName: "Anisa Octa N",
-    email: "anisa.octa@sinarmas-agri.co.id",
+    fullName: "Administrator",
+    email: "admin@beacon-engineering.id",
     estate: "Sei Galuh",
     role: "Officer",
   })

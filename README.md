@@ -31,13 +31,20 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Mengganti nilainya akan membatalkan semua sesi yang sedang aktif.
 
-## Akun seed
+## Akun administrator
 
-| Username | Password | Peran |
-|---|---|---|
-| `admin` | `admin123` | Admin |
-| `operator` | `operator123` | Operator |
-| `viewer` | `viewer123` | Viewer |
+`npm run db:seed` membuat tiga peran (Admin, Operator, Viewer) dan satu akun `admin`.
+Passwordnya diambil dari env `ADMIN_PASSWORD` dan tidak pernah disimpan di repo:
+
+```bash
+printf 'ADMIN_PASSWORD=%s\n' 'password-pilihanmu' > .env.seed
+chmod 600 .env.seed
+set -a; . ./.env.seed; set +a; npm run db:seed
+rm -f .env.seed
+```
+
+Seed memakai upsert, jadi menjalankannya ulang hanya menyetel ulang password akun `admin`
+tanpa menghapus apa pun. Akun tambahan dibuat manual oleh administrator.
 
 ## Autentikasi
 

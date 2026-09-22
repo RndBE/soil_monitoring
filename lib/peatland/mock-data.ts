@@ -1,17 +1,17 @@
 // Mock data untuk Peatland & Plantation Monitoring Dashboard.
-// Semua angka statis menyesuaikan mockup (PT Sinarmas Agribusiness, 9-10 Sep 2024).
+// Semua angka statis menyesuaikan mockup (9-10 Sep 2024).
 
 export type Severity = "critical" | "warning" | "info"
 export type StatusLevel = "normal" | "warning" | "critical" | "offline"
 
 export const dashboardMeta = {
   title: "Peatland & Plantation Monitoring Dashboard",
-  org: "PT Sinarmas Agribusiness",
+  org: "Beacon Engineering",
   estate: "Sei Galuh Estate",
   division: "Block C",
   dateRange: "9 - 10 Sep 2024",
   weather: { temp: "24°C", condition: "Light Rain" },
-  user: { name: "Anisa Octa N", role: "Peat Management Officer" },
+  user: { name: "Operator", role: "Peat Management Officer" },
   lastUpdate: "10 Sep 2024 09:37 AM",
 }
 

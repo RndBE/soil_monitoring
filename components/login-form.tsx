@@ -26,13 +26,6 @@ function safeNext(value: string | null): string {
   return value
 }
 
-/** Akun hasil `npm run db:seed` — tombol isi cepat untuk demo. */
-const DEMO_ACCOUNTS = [
-  { label: "Admin", username: "admin", password: "admin123" },
-  { label: "Operator", username: "operator", password: "operator123" },
-  { label: "Viewer", username: "viewer", password: "viewer123" },
-]
-
 const inputClass =
   "h-11 rounded-lg border-white/10 bg-white/[0.03] text-[13.5px] text-white placeholder:text-white/25 focus-visible:border-emerald-400/60 focus-visible:ring-emerald-400/20"
 
@@ -153,28 +146,6 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
         )}
         {submitting ? "Memverifikasi…" : "Masuk"}
       </Button>
-
-      <div className="flex flex-col gap-2 border-t border-white/8 pt-4">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/30">
-          Akun demo
-        </span>
-        <div className="flex flex-wrap gap-2">
-          {DEMO_ACCOUNTS.map((account) => (
-            <button
-              key={account.username}
-              type="button"
-              onClick={() => {
-                setUsername(account.username)
-                setPassword(account.password)
-                setError(null)
-              }}
-              className="rounded-md border border-white/8 bg-white/[0.03] px-2.5 py-1 text-[11.5px] font-medium text-white/60 transition-colors hover:border-emerald-400/30 hover:bg-emerald-500/10 hover:text-emerald-300"
-            >
-              {account.label}
-            </button>
-          ))}
-        </div>
-      </div>
     </form>
   )
 }
