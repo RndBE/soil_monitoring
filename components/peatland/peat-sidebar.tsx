@@ -108,8 +108,8 @@ export function PeatSidebar() {
       <Link href="/" className="flex items-center gap-2.5 px-4 py-4">
         <BrandLogo className="size-9 shrink-0 drop-shadow-[0_2px_6px_rgba(0,0,0,0.4)]" />
         <div className="grid leading-tight">
-          <span className="text-[11.5px] font-bold tracking-wide text-white">SMART IRIGATION SYSTEM</span>
-          <span className="text-[9.5px] font-medium text-white/40">CILIWUNG - CISADANE</span>
+          <span className="text-[11.5px] font-bold tracking-wide text-white">PEATLAND MONITORING</span>
+          <span className="text-[9.5px] font-medium text-white/40">PLANTATION & PEAT MANAGEMENT</span>
         </div>
       </Link>
 

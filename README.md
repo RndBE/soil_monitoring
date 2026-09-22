@@ -1,65 +1,73 @@
-# Dashboard Pemantauan Irigasi
+# Peatland & Plantation Monitoring Dashboard
 
-Dashboard monitoring Daerah Irigasi berbasis sensor muka air (AWLR), flow meter (debit), status pintu air, dan stasiun cuaca + kelembaban tanah. Mendukung monitoring realtime, kontrol/otomasi pintu air, alarm, dan laporan distribusi air.
+Dashboard pemantauan lahan gambut dan perkebunan: muka air gambut (borehole), subsidence, indeks risiko kebakaran, curah hujan, dan kesehatan tanaman (NDVI). Mendukung peta estate interaktif, pusat alarm, dan laporan.
 
 ## Stack
 
-- Next.js 16 App Router + TypeScript
-- Tailwind CSS v4 + shadcn/ui
-- Prisma ORM + MySQL
-- Leaflet (peta jaringan irigasi)
-- Recharts (time-series chart)
+- Next.js 16 (App Router) + React 19 + TypeScript
+- Tailwind CSS 4 + shadcn/ui
+- Recharts (grafik), Leaflet (peta estate)
+- Prisma + MySQL (akun login)
 
-## Ruang Lingkup Awal
+## Konteks data
 
-- **Konteks:** 1 Daerah Irigasi tunggal (DI Demo) dengan hierarki saluran primer → sekunder → tersier.
-- **Sensor:** AWLR (tinggi muka air), flow meter (debit), aktuator pintu air, weather station, soil moisture.
-- **Kontrol:** Monitoring + kontrol otomatis (manual/jadwal/alarm). Transport hardware (MQTT/HTTP) ditambah setelah UI siap.
-- **Auth:** Belum diaktifkan — fokus UI dulu.
+Data pemantauan saat ini dilayani dari `lib/peatland/mock-data.ts`. Database hanya menyimpan akun dan peran untuk autentikasi.
 
 ## Setup
 
-```env
-DATABASE_URL="mysql://root:madiun2001@localhost:3306/irigasi_dashboard"
-NEXT_PUBLIC_APP_URL="http://localhost:3000"
-```
-
-```sql
-CREATE DATABASE IF NOT EXISTS irigasi_dashboard;
-```
-
 ```bash
 npm install
-npm run db:generate
+cp .env.example .env   # isi DATABASE_URL dan AUTH_SECRET
 npm run db:push
 npm run db:seed
 npm run dev
 ```
 
-Lalu buka `http://localhost:3000`.
-
-### MySQL via Docker (opsional)
+`AUTH_SECRET` wajib diisi, minimal 32 karakter:
 
 ```bash
-docker compose up -d mysql
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+Mengganti nilainya akan membatalkan semua sesi yang sedang aktif.
+
+## Akun seed
+
+| Username | Password | Peran |
+|---|---|---|
+| `admin` | `admin123` | Admin |
+| `operator` | `operator123` | Operator |
+| `viewer` | `viewer123` | Viewer |
+
+## Autentikasi
+
+Sesi disimpan sebagai cookie `soil_session` — httpOnly, `SameSite=Lax`, berlaku 7 hari, isinya ditandatangani HMAC-SHA256 memakai `AUTH_SECRET`. `middleware.ts` memverifikasi setiap request; tanpa sesi yang sah semua rute dialihkan ke `/login?next=…`, kecuali `/login` sendiri dan endpoint auth.
 
 ## Halaman
 
-| Path | Isi |
+| Rute | Isi |
 |---|---|
-| `/` | Dashboard utama (KPI debit, muka air, pintu aktif, alarm, cuaca) |
-| `/peta-jaringan` | Peta jaringan irigasi (saluran + pintu + sensor) |
-| `/muka-air` | Time series tinggi muka air per titik |
-| `/debit` | Time series debit per titik |
-| `/pintu-air` | Status, kontrol manual, jadwal otomatis, log aktuasi |
-| `/cuaca-tanah` | Soil moisture, hujan, ET₀, rekomendasi irigasi |
-| `/analisa-data` | Analisa lintas parameter |
-| `/alarm` | Alarm & event aktif/historis |
-| `/laporan` | Laporan distribusi air |
-| `/perangkat` | Status logger/sensor/aktuator |
-| `/pengaturan` | Threshold, mode global, ambang alarm |
+| `/` | Overview: KPI, peta estate, alert center, grafik, tabel |
+| `/map-view` | Peta estate layar penuh |
+| `/peat-monitoring` | Ringkasan stasiun gambut |
+| `/peat-monitoring/subsidence` | Penurunan permukaan gambut |
+| `/borehole-monitoring` | Muka air per borehole |
+| `/weather-rainfall` | Cuaca dan curah hujan |
+| `/fire-risk` | Indeks risiko kebakaran dan hotspot |
+| `/plantation-health` | Kesehatan tanaman (NDVI) |
+| `/agriculture` | Agronomi dan produktivitas |
+| `/alerts` | Daftar alarm |
+| `/reports` | Laporan |
+| `/settings` | Pengaturan |
+| `/login` | Halaman masuk |
 
-## Catatan
+## Perintah
 
-Schema dan seed mendefinisikan 1 DI Demo + saluran + 5 pintu air + 8 titik sensor + readings 7 hari. Halaman akan error tanpa seed atau `DATABASE_URL` aktif.
+| Perintah | Fungsi |
+|---|---|
+| `npm run dev` | Server pengembangan |
+| `npm run build` | Build produksi |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run db:push` | Sinkronkan schema ke MySQL |
+| `npm run db:seed` | Isi role dan akun |

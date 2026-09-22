@@ -1,12 +1,14 @@
 import bcrypt from "bcryptjs";
+import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { sessionCookie, signSession, type SessionUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  username: z.string().trim().min(1),
   password: z.string().min(1),
 });
 
@@ -15,34 +17,61 @@ export async function POST(request: Request) {
   const parsed = loginSchema.safeParse(body);
 
   if (!parsed.success) {
-    return Response.json(
-      { error: "Email atau password tidak valid.", issues: parsed.error.flatten() },
+    return NextResponse.json(
+      { error: "Username atau password tidak valid.", issues: parsed.error.flatten() },
       { status: 400 },
     );
   }
 
-  const user = await prisma.user.findUnique({
-    where: { email: parsed.data.email },
-    include: { role: true },
-  });
+  let user;
+  try {
+    user = await prisma.user.findUnique({
+      where: { username: parsed.data.username },
+      include: { role: true },
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Layanan autentikasi sedang tidak tersedia. Coba beberapa saat lagi." },
+      { status: 503 },
+    );
+  }
+
+  // Pesan sengaja disamakan supaya username yang terdaftar tidak bisa ditebak.
+  const invalid = NextResponse.json(
+    { error: "Username atau password salah." },
+    { status: 401 },
+  );
 
   if (!user) {
-    return Response.json({ error: "Akun tidak ditemukan." }, { status: 401 });
+    // Tetap jalankan hash dummy agar waktu respons tidak membocorkan
+    // keberadaan akun.
+    await bcrypt.compare(parsed.data.password, "$2a$08$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi");
+    return invalid;
   }
 
-  const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
-
-  if (!valid) {
-    return Response.json({ error: "Password salah." }, { status: 401 });
+  if (!(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
+    return invalid;
   }
 
-  return Response.json({
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role.name,
-      access: user.role.access,
-    },
-  });
+  const sessionUser: SessionUser = {
+    id: user.id,
+    name: user.name,
+    username: user.username,
+    role: user.role.name,
+    access: user.role.access,
+  };
+
+  let token: string;
+  try {
+    token = await signSession(sessionUser);
+  } catch {
+    return NextResponse.json(
+      { error: "Sesi tidak bisa dibuat: AUTH_SECRET belum diatur di server." },
+      { status: 500 },
+    );
+  }
+
+  const response = NextResponse.json({ user: sessionUser });
+  response.cookies.set(sessionCookie(token));
+  return response;
 }

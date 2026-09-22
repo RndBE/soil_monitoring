@@ -186,20 +186,6 @@ a {
   }
 }
 
-@keyframes login-wave-drift {
-  0%,
-  100% {
-    stroke-dasharray: 8 14;
-    stroke-dashoffset: 0;
-    opacity: 0.52;
-  }
-  50% {
-    stroke-dasharray: 18 10;
-    stroke-dashoffset: -28;
-    opacity: 0.92;
-  }
-}
-
 @keyframes login-marker-breathe {
   0%,
   100% {
@@ -275,13 +261,15 @@ a {
   0%,
   100% {
     box-shadow:
-      0 24px 70px rgb(15 23 42 / 0.08),
-      inset 0 1px 0 rgb(255 255 255 / 0.7);
+      0 28px 80px rgb(0 0 0 / 0.55),
+      0 0 0 1px rgb(52 211 153 / 0.06),
+      inset 0 1px 0 rgb(255 255 255 / 0.06);
   }
   50% {
     box-shadow:
-      0 28px 86px rgb(15 23 42 / 0.12),
-      inset 0 1px 0 rgb(255 255 255 / 0.8);
+      0 34px 96px rgb(0 0 0 / 0.65),
+      0 0 0 1px rgb(52 211 153 / 0.12),
+      inset 0 1px 0 rgb(255 255 255 / 0.1);
   }
 }
 
@@ -378,9 +366,9 @@ a {
 
   .login-ops-bg {
     background:
-      linear-gradient(90deg, rgb(15 23 42 / 0.045) 1px, transparent 1px),
-      linear-gradient(0deg, rgb(15 23 42 / 0.04) 1px, transparent 1px),
-      linear-gradient(180deg, #f8fafc 0%, #eef2f7 46%, #dceff2 100%);
+      linear-gradient(90deg, rgb(255 255 255 / 0.028) 1px, transparent 1px),
+      linear-gradient(0deg, rgb(255 255 255 / 0.024) 1px, transparent 1px),
+      radial-gradient(120% 90% at 22% 12%, #12241b 0%, #0a1310 44%, #060a08 100%);
     background-size:
       48px 48px,
       48px 48px,
@@ -388,34 +376,8 @@ a {
     animation: login-grid-drift 18s linear infinite;
   }
 
-  .login-command-card,
-  .login-side-panel,
-  .login-alert-strip {
-    animation: login-soft-enter 420ms ease-out both;
-    box-shadow:
-      0 24px 72px rgb(15 23 42 / 0.12),
-      inset 0 1px 0 rgb(255 255 255 / 0.75);
-  }
-
-  .login-side-panel {
-    animation-delay: 80ms;
-  }
-
-  .login-alert-strip {
-    animation-delay: 180ms;
-  }
-
-  .login-wave-line {
-    animation: login-wave-drift 5.2s ease-in-out infinite;
-  }
-
-  .login-coastline,
   .login-data-route {
     animation: login-route-flow 7s linear infinite;
-  }
-
-  .login-wave-line-delay {
-    animation-delay: 1.4s;
   }
 
   .login-marker-ping {
@@ -432,7 +394,6 @@ a {
   }
 
   .login-float-card,
-  .login-role-chip,
   .login-float-row {
     animation: login-soft-enter 420ms ease-out both;
   }
@@ -447,10 +408,10 @@ a {
 
   .login-form-side {
     background:
-      linear-gradient(90deg, rgb(15 23 42 / 0.045) 1px, transparent 1px),
-      linear-gradient(0deg, rgb(15 23 42 / 0.04) 1px, transparent 1px),
-      linear-gradient(135deg, transparent 0%, rgb(14 116 144 / 0.045) 48%, transparent 48.5%),
-      var(--background);
+      linear-gradient(90deg, rgb(255 255 255 / 0.02) 1px, transparent 1px),
+      linear-gradient(0deg, rgb(255 255 255 / 0.018) 1px, transparent 1px),
+      radial-gradient(90% 60% at 50% 0%, rgb(52 211 153 / 0.07) 0%, transparent 70%),
+      #080d0a;
     background-size:
       40px 40px,
       40px 40px,

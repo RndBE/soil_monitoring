@@ -3,8 +3,10 @@ import type { ReactNode } from "react";
 
 import "./globals.css";
 import { Geist } from "next/font/google";
+import { SessionProvider } from "@/components/session-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { getSessionUser } from "@/lib/auth/server";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -12,9 +14,9 @@ const geist = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "Dashboard Pemantauan Irigasi",
+  title: "Peatland & Plantation Monitoring Dashboard",
   description:
-    "Sistem monitoring muka air, debit, pintu air, cuaca, dan kelembaban tanah Daerah Irigasi.",
+    "Sistem pemantauan muka air gambut, subsidence, risiko kebakaran, curah hujan, dan kesehatan tanaman perkebunan.",
   icons: {
     icon: [{ url: "/favicon.png", type: "image/png" }],
     shortcut: ["/favicon.png"],
@@ -22,11 +24,15 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const user = await getSessionUser();
+
   return (
     <html lang="id" className={geist.variable}>
       <body>
-        <TooltipProvider>{children}</TooltipProvider>
+        <SessionProvider user={user}>
+          <TooltipProvider>{children}</TooltipProvider>
+        </SessionProvider>
         <Toaster position="top-right" richColors closeButton />
       </body>
     </html>

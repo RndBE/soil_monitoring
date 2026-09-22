@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import { CalendarIcon, ChevronDownIcon, CloudRainIcon, LogOutIcon, SettingsIcon, UserIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { useSession } from "@/components/session-provider"
+import { logout } from "@/lib/auth/client"
 import { dashboardMeta } from "@/lib/peatland/mock-data"
 import { cn } from "@/lib/utils"
 
@@ -72,6 +74,10 @@ function Selector({
 export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: string }) {
   const m = dashboardMeta
   const router = useRouter()
+  const user = useSession()
+  const displayName = user?.name ?? m.user.name
+  const displayRole = user?.role ?? m.user.role
+  const [loggingOut, setLoggingOut] = useState(false)
   const [estate, setEstate] = useState(m.estate)
   const [division, setDivision] = useState(m.division)
   const [dateRange, setDateRange] = useState(m.dateRange)
@@ -121,15 +127,15 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
           className="flex items-center gap-2.5 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 transition-colors hover:bg-white/[0.06]"
         >
           <span className="inline-flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-sky-500 text-[12px] font-bold text-white">
-            {m.user.name
+            {displayName
               .split(" ")
               .map((p) => p[0])
               .slice(0, 2)
               .join("")}
           </span>
           <div className="grid leading-tight">
-            <span className="text-[12.5px] font-semibold text-white/90">{m.user.name}</span>
-            <span className="text-[10px] text-white/45">{m.user.role}</span>
+            <span className="text-[12.5px] font-semibold text-white/90">{displayName}</span>
+            <span className="text-[10px] text-white/45">{displayRole}</span>
           </div>
           <ChevronDownIcon className={cn("size-3.5 text-white/40 transition-transform", profileOpen && "rotate-180")} />
         </button>
@@ -153,13 +159,15 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
             <SettingsIcon className="size-3.5" /> Pengaturan
           </button>
           <button
-            onClick={() => {
+            disabled={loggingOut}
+            onClick={async () => {
+              setLoggingOut(true)
               setProfileOpen(false)
-              toast("Anda telah keluar dari sesi.")
+              await logout()
             }}
-            className="flex w-full items-center gap-2 border-t border-white/5 px-3 py-2 text-left text-[12.5px] text-red-400 transition-colors hover:bg-white/5"
+            className="flex w-full items-center gap-2 border-t border-white/5 px-3 py-2 text-left text-[12.5px] text-red-400 transition-colors hover:bg-white/5 disabled:opacity-60"
           >
-            <LogOutIcon className="size-3.5" /> Keluar
+            <LogOutIcon className="size-3.5" /> {loggingOut ? "Keluar…" : "Keluar"}
           </button>
         </MenuShell>
       </div>
