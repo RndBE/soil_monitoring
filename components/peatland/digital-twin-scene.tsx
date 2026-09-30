@@ -36,7 +36,7 @@ import {
 import { matchesBlock } from "@/lib/peatland/filter-logic"
 import { lahanGambut } from "@/lib/peatland/lahan-gambut"
 import { canalLines } from "@/lib/peatland/map-points"
-import { waterways } from "@/lib/peatland/waterways"
+import { estateWaterways } from "@/lib/peatland/estate-waterways"
 
 export type TwinOverlays = {
   imagery: boolean
@@ -402,8 +402,8 @@ export default function DigitalTwinScene(props: SceneProps) {
       }
       ctx.stroke()
     }
-    const riverLines = waterways.filter((w) => w.kind === "river" || w.kind === "stream").map((w) => w.coords)
-    const drainLines = waterways.filter((w) => w.kind !== "river" && w.kind !== "stream").map((w) => w.coords)
+    const riverLines = estateWaterways.filter((w) => w.kind === "river" || w.kind === "stream").map((w) => w.coords)
+    const drainLines = estateWaterways.filter((w) => w.kind !== "river" && w.kind !== "stream").map((w) => w.coords)
 
     // Mask "di dalam kawasan" pada grid tanah (baris DataTexture 0 = selatan).
     const FH = Math.round((FIELD_W * groundD) / groundW)
@@ -888,7 +888,7 @@ export default function DigitalTwinScene(props: SceneProps) {
     const rRank: number[] = []
     const rIdx: number[] = []
     let base = 0
-    for (const ww of waterways) {
+    for (const ww of estateWaterways) {
       const pts = ww.coords.map(([lng, lat]) => project(lng, lat))
       if (pts.length < 2) continue
       const w = ww.rank === 1 ? 0.7 : ww.rank === 2 ? 0.3 : 0.14

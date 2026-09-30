@@ -19,7 +19,7 @@ import {
 import { TWIN_ASSETS } from "@/lib/peatland/digital-twin"
 import { lahanGambut } from "@/lib/peatland/lahan-gambut"
 import { blockPoints, markerPoints, type MarkerKind, type MarkerLayer } from "@/lib/peatland/map-points"
-import { waterways } from "@/lib/peatland/waterways"
+import { estateWaterways } from "@/lib/peatland/estate-waterways"
 import { matchesBlock } from "@/lib/peatland/filter-logic"
 import {
   STATIONS,
@@ -244,7 +244,7 @@ export default function EstateMapLeaflet({
         {/* Sungai, kanal & parit (OpenStreetMap) — layer "canal". Sungai bernama tebal dengan halo,
             parit tipis; digambar di canvas karena jumlah garisnya ratusan. */}
         {isVisible("canal") &&
-          waterways.map((w, i) => (
+          estateWaterways.map((w, i) => (
             <Fragment key={`ww-${i}`}>
               {w.rank === 1 && (
                 <Polyline
