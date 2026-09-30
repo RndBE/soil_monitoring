@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import { CalendarIcon, ChevronDownIcon, CloudRainIcon, LogOutIcon, SettingsIcon, UserIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -15,16 +15,29 @@ import {
 } from "@/lib/peatland/filter-logic"
 import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
+import { MobileNav } from "./peat-sidebar"
 
 // Halaman yang tidak menampilkan filter Estate/Division/Date di header.
 const HIDE_FILTERS_ON = ["/settings", "/reports", "/map-view", "/alerts"]
 
 function MenuShell({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
+  // Esc menutup menu.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [open, onClose])
   if (!open) return null
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-full overflow-hidden rounded-lg border border-white/10 bg-[#10201a] py-1 shadow-xl shadow-black/40">
+      <div
+        role="menu"
+        className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-full overflow-hidden rounded-[10px] border border-emerald-200/[0.12] bg-[rgba(6,20,14,0.97)] py-1 shadow-xl shadow-black/50"
+      >
         {children}
       </div>
     </>
@@ -47,10 +60,12 @@ function Selector({
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
         className="flex min-w-[130px] items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 text-left transition-colors hover:bg-white/[0.06]"
       >
         <div className="grid flex-1 leading-tight">
-          <span className="text-[9px] uppercase tracking-wide text-white/35">{label}</span>
+          <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-white/50">{label}</span>
           <span className="text-[12.5px] font-semibold text-white/90">{value}</span>
         </div>
         <ChevronDownIcon className={cn("size-3.5 text-white/40 transition-transform", open && "rotate-180")} />
@@ -90,10 +105,11 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
   const showFilters = !HIDE_FILTERS_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 
   return (
-    <header className="flex flex-wrap items-center gap-3 border-b border-white/5 px-5 py-3">
-      <div className="mr-auto min-w-[240px]">
-        <h1 className="text-[19px] font-bold leading-tight text-white">{title ?? m.title}</h1>
-        {subtitle ? <p className="text-[12px] text-emerald-400/80">{subtitle}</p> : null}
+    <header className="flex flex-wrap items-center gap-3 border-b border-white/5 bg-[linear-gradient(180deg,rgba(16,185,129,0.035),transparent)] px-4 py-3 sm:px-5">
+      <MobileNav />
+      <div className="mr-auto min-w-0 flex-1 sm:min-w-[240px]">
+        <h1 className="truncate text-[19px] font-bold leading-tight tracking-[-0.01em] text-white">{title ?? m.title}</h1>
+        {subtitle ? <p className="truncate text-[12px] text-emerald-400/80">{subtitle}</p> : null}
       </div>
 
       {showFilters && (
@@ -106,7 +122,7 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
         </>
       )}
 
-      <div className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5">
+      <div className="hidden items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 sm:flex">
         <CloudRainIcon className="size-5 text-sky-400" />
         <div className="grid leading-tight">
           <span className="text-[13px] font-bold text-white">{m.weather.temp}</span>
@@ -117,6 +133,8 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
       <div className="relative">
         <button
           onClick={() => setProfileOpen((o) => !o)}
+          aria-haspopup="menu"
+          aria-expanded={profileOpen}
           className="flex items-center gap-2.5 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5 transition-colors hover:bg-white/[0.06]"
         >
           <span className="inline-flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-sky-500 text-[12px] font-bold text-white">
@@ -126,7 +144,7 @@ export function PeatHeader({ title, subtitle }: { title?: string; subtitle?: str
               .slice(0, 2)
               .join("")}
           </span>
-          <div className="grid leading-tight">
+          <div className="hidden leading-tight sm:grid">
             <span className="text-[12.5px] font-semibold text-white/90">{displayName}</span>
             <span className="text-[10px] text-white/45">{displayRole}</span>
           </div>
@@ -174,7 +192,9 @@ function DateButton({ value, onSelect }: { value: string; onSelect: (v: string) 
     <>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-[12.5px] font-medium text-white/85 transition-colors hover:bg-white/[0.06]"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex h-[42px] items-center gap-2 rounded-lg border border-white/8 bg-white/[0.03] px-3 text-[12.5px] font-medium text-white/85 transition-colors hover:bg-white/[0.06]"
       >
         <CalendarIcon className="size-4 text-white/50" />
         {value}

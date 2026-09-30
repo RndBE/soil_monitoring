@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 
 import { LoginForm } from "@/components/login-form"
 import { BrandLogo } from "@/components/peatland/brand-logo"
+import { EWS_META, ewsFromFireRisk, ewsFromWaterTable } from "@/lib/peatland/digital-twin"
 import {
   alerts,
   dashboardMeta,
@@ -33,17 +34,22 @@ function sparkPath(values: number[], w: number, h: number) {
 }
 
 const waterValues = waterTableTrend.map((d) => d.value)
+const waterLatest = waterValues.at(-1) ?? 0
 const fireValue = fireRiskTrend.at(-1)?.value ?? 0
 const criticalCount = alerts.filter((a) => a.severity === "critical").length
 
-/** Titik stasiun pada peta dekoratif: [x%, y%, tone] */
+// Warna status mengikuti EWS dashboard: −35 cm = Waspada, indeks 82 = Siaga.
+const waterEws = EWS_META[ewsFromWaterTable(waterLatest)]
+const fireEws = EWS_META[ewsFromFireRisk(fireValue)]
+
+/** Titik stasiun pada peta dekoratif: [x%, y%, warna EWS] */
 const MARKERS: Array<[number, number, string]> = [
-  [22, 30, "#34d399"],
-  [38, 52, "#34d399"],
-  [57, 26, "#fbbf24"],
-  [68, 62, "#34d399"],
-  [46, 78, "#ef4444"],
-  [80, 42, "#34d399"],
+  [22, 30, EWS_META.normal.color],
+  [38, 52, EWS_META.normal.color],
+  [57, 26, EWS_META.waspada.color],
+  [68, 62, EWS_META.normal.color],
+  [46, 78, EWS_META.awas.color],
+  [80, 42, EWS_META.normal.color],
 ]
 
 export default function LoginPage() {
@@ -148,10 +154,10 @@ export default function LoginPage() {
             <BrandLogo className="size-11 shrink-0 drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]" />
             <div className="grid leading-tight">
               <span className="text-[12px] font-bold tracking-[0.16em] text-white">
-                PEATLAND MONITORING
+                PEATLAND &amp; PLANTATION
               </span>
-              <span className="text-[10px] font-medium tracking-wide text-white/40">
-                {dashboardMeta.org.toUpperCase()}
+              <span className="text-[10px] font-medium tracking-wide text-white/55">
+                MONITORING SYSTEM · {dashboardMeta.org.toUpperCase()}
               </span>
             </div>
           </div>
@@ -164,7 +170,7 @@ export default function LoginPage() {
                 lindungi kebun.
               </span>
             </h2>
-            <p className="text-[13.5px] leading-relaxed text-white/50">
+            <p className="text-[13.5px] leading-relaxed text-white/65">
               Muka air, risiko kebakaran, curah hujan, dan kesehatan tanaman dari{" "}
               {stations.total} stasiun lapangan — dalam satu layar, diperbarui terus-menerus.
             </p>
@@ -173,7 +179,7 @@ export default function LoginPage() {
             <div className="login-float-card w-fit rounded-xl border border-white/8 bg-white/[0.04] p-3.5 ring-1 ring-white/5 backdrop-blur-md">
               <div className="mb-2 flex items-center gap-2">
                 <span className="size-1.5 rounded-full bg-emerald-400" />
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/45">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/60">
                   Sinkronisasi telemetri
                 </span>
               </div>
@@ -186,12 +192,12 @@ export default function LoginPage() {
           {/* Kartu metrik */}
           <div className="grid grid-cols-3 gap-3">
             <div className="login-float-row rounded-xl border border-white/8 bg-white/[0.04] p-3.5 ring-1 ring-white/5 backdrop-blur-md">
-              <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-white/60">
                 Stasiun Online
               </div>
               <div className="mt-1 text-[22px] font-bold leading-none">
                 {stations.online}
-                <span className="ml-1 text-[12px] font-medium text-white/35">
+                <span className="ml-1 text-[12px] font-medium text-white/55">
                   /{stations.total}
                 </span>
               </div>
@@ -204,18 +210,21 @@ export default function LoginPage() {
             </div>
 
             <div className="login-float-row rounded-xl border border-white/8 bg-white/[0.04] p-3.5 ring-1 ring-white/5 backdrop-blur-md">
-              <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-white/60">
                 Muka Air 7 Hari
               </div>
-              <div className="mt-1 text-[22px] font-bold leading-none text-emerald-300">
-                {waterValues.at(-1)}
-                <span className="ml-1 text-[12px] font-medium text-white/35">cm</span>
+              <div className="mt-1 flex items-baseline gap-1 text-[22px] font-bold leading-none" style={{ color: waterEws.color }}>
+                {waterLatest}
+                <span className="text-[12px] font-medium text-white/55">cm</span>
+                <span className="ml-auto font-mono text-[9.5px] font-bold uppercase tracking-[0.1em]">
+                  {waterEws.label}
+                </span>
               </div>
               <svg viewBox="0 0 96 22" className="mt-1.5 h-[22px] w-full" fill="none">
                 {/* Garis dasar selalu tampak; kilau berjalan di atasnya. */}
                 <path
                   d={sparkPath(waterValues, 96, 20)}
-                  stroke="#34d399"
+                  stroke={waterEws.color}
                   strokeOpacity="0.35"
                   strokeWidth="1.6"
                   strokeLinecap="round"
@@ -224,7 +233,7 @@ export default function LoginPage() {
                 <path
                   className="login-spark-line"
                   d={sparkPath(waterValues, 96, 20)}
-                  stroke="#6ee7b7"
+                  stroke={waterEws.color}
                   strokeWidth="1.6"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -233,14 +242,17 @@ export default function LoginPage() {
             </div>
 
             <div className="login-float-row rounded-xl border border-white/8 bg-white/[0.04] p-3.5 ring-1 ring-white/5 backdrop-blur-md">
-              <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-white/60">
                 Indeks Kebakaran
               </div>
-              <div className="mt-1 text-[22px] font-bold leading-none text-amber-300">
+              <div className="mt-1 flex items-baseline gap-1 text-[22px] font-bold leading-none" style={{ color: fireEws.color }}>
                 {fireValue}
+                <span className="ml-auto font-mono text-[9.5px] font-bold uppercase tracking-[0.1em]">
+                  {fireEws.label}
+                </span>
               </div>
-              <div className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-white/40">
-                <span className="size-1.5 rounded-full bg-red-500" />
+              <div className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-white/60">
+                <span className="size-1.5 rounded-full" style={{ background: EWS_META.awas.color }} />
                 {criticalCount} alert kritis
               </div>
             </div>
@@ -255,10 +267,10 @@ export default function LoginPage() {
           <BrandLogo className="size-9 shrink-0" idPrefix="bl-login-mobile" />
           <div className="grid leading-tight">
             <span className="text-[11.5px] font-bold tracking-[0.14em] text-white">
-              PEATLAND MONITORING
+              PEATLAND &amp; PLANTATION
             </span>
-            <span className="text-[9.5px] font-medium text-white/40">
-              {dashboardMeta.org.toUpperCase()}
+            <span className="text-[9.5px] font-medium text-white/55">
+              MONITORING SYSTEM · {dashboardMeta.org.toUpperCase()}
             </span>
           </div>
         </div>
@@ -271,7 +283,7 @@ export default function LoginPage() {
           </Suspense>
         </div>
 
-        <p className="mt-6 text-center text-[11px] leading-relaxed text-white/30">
+        <p className="mt-6 text-center text-[11px] leading-relaxed text-white/50">
           {dashboardMeta.org} · Sistem internal. Aktivitas masuk dicatat.
         </p>
       </section>

@@ -26,13 +26,14 @@ a {
 }
 
 ::selection {
-  background: #0f172a;
+  background: rgba(16, 185, 129, 0.35);
   color: #ffffff;
 }
 
 @theme inline {
   --font-heading: var(--font-geist-sans);
   --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -115,8 +116,8 @@ a {
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.765 0.177 163.2);
+  --primary-foreground: oklch(0.2 0.04 165);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -126,15 +127,15 @@ a {
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --ring: oklch(0.696 0.17 162.48);
+  --chart-1: oklch(0.765 0.177 163.2);
+  --chart-2: oklch(0.746 0.16 232.66);
+  --chart-3: oklch(0.828 0.189 84.43);
+  --chart-4: oklch(0.704 0.191 22.22);
+  --chart-5: oklch(0.714 0.203 305.5);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.696 0.17 162.48);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
@@ -274,6 +275,33 @@ a {
 }
 
 @layer components {
+  /* Label kecil bergaya command center (mono, huruf kapital, renggang). */
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--tw-ink-mute);
+  }
+
+  /* Scrollbar tipis bernuansa emerald untuk area konten & tabel. */
+  .peat-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(110, 231, 183, 0.18) transparent;
+  }
+  .peat-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .peat-scroll::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(110, 231, 183, 0.16);
+  }
+  .peat-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(110, 231, 183, 0.3);
+  }
+
   .motion-fade-in {
     animation: ui-enter 180ms ease-out both;
   }
@@ -290,7 +318,7 @@ a {
   .interactive-card:hover,
   .interactive-card:focus-within {
     transform: translateY(-2px);
-    box-shadow: 0 14px 32px rgb(15 23 42 / 0.08);
+    box-shadow: 0 14px 32px rgb(0 0 0 / 0.35);
   }
 
   .interactive-card:active {
@@ -613,3 +641,230 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* === Digital twin — pola Beacon Command Center, aksen emerald === */
+:root {
+  --tw-bg: #040d09;
+  --tw-glass: rgba(4, 16, 11, 0.68);
+  --tw-line: rgba(110, 231, 183, 0.16);
+  --tw-line-strong: rgba(110, 231, 183, 0.3);
+  --tw-ink: #ecf6f0;
+  --tw-ink-2: #c7d8cf;
+  --tw-ink-soft: #93a89c;
+  --tw-ink-mute: #6f8579;
+  --tw-accent: #34d399;
+  --tw-accent-soft: rgba(16, 185, 129, 0.28);
+  --tw-surface-2: rgba(255, 255, 255, 0.024);
+  --tw-ok: #46d78f;
+  --tw-waspada: #ffd27a;
+  --tw-warn: #ffb454;
+  --tw-danger: #ff7a66;
+}
+
+.twin-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--tw-ok);
+  animation: twin-pulse-green 1.8s ease-out infinite;
+}
+
+@keyframes twin-pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(70, 215, 143, 0.6); }
+  100% { box-shadow: 0 0 0 7px rgba(70, 215, 143, 0); }
+}
+
+@keyframes twin-blink {
+  50% { opacity: 0.35; }
+}
+
+/* Callout sensor di atas model 3D (elemen CSS2D). */
+.twin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--c) 50%, transparent);
+  border-radius: 8px;
+  background: rgba(3, 12, 8, 0.84);
+  color: var(--tw-ink, #ecf6f0);
+  font-size: 10.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  transform: translateY(var(--dy, 0px));
+  transition: transform 0.25s, background 0.15s, border-color 0.15s;
+}
+.twin-label b { color: var(--c); font-weight: 700; letter-spacing: 0.04em; }
+.twin-label__v { color: #c7d8cf; }
+.twin-label__dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: #46d78f;
+  box-shadow: 0 0 8px #46d78f;
+}
+.twin-label:hover { background: rgba(8, 40, 26, 0.95); }
+.twin-label--waspada .twin-label__dot { background: #ffd27a; box-shadow: 0 0 8px #ffd27a; }
+.twin-label--warn { border-color: rgba(255, 180, 84, 0.65); }
+.twin-label--warn .twin-label__dot { background: #ffb454; box-shadow: 0 0 8px #ffb454; }
+.twin-label--alarm { border-color: rgba(255, 122, 102, 0.8); background: rgba(58, 14, 12, 0.85); }
+.twin-label--alarm .twin-label__dot { background: #ff7a66; box-shadow: 0 0 8px #ff7a66; animation: twin-blink 1s infinite; }
+.twin-label--off { border-style: dashed; border-color: rgba(251, 113, 133, 0.7); }
+.twin-label--off .twin-label__dot { background: #fb7185; box-shadow: 0 0 8px #fb7185; animation: twin-blink 1.2s infinite; }
+.twin-label--off .twin-label__v { color: #fda4af; font-weight: 700; }
+.twin-label.is-selected {
+  border-color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 0 2px rgba(167, 243, 208, 0.25), 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.twin-label.is-selected .twin-label__v { color: #fff; }
+
+/* Slider timeline: track transparan di atas sparkline, thumb bulat menyala. */
+.twin-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 34px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+}
+.twin-range::-webkit-slider-runnable-track { height: 34px; background: transparent; }
+.twin-range::-moz-range-track { height: 34px; background: transparent; }
+.twin-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 10px;
+  border: 2px solid var(--tw-accent);
+  border-radius: 50%;
+  background: #ecf6f0;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.85);
+}
+.twin-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--tw-accent);
+  border-radius: 50%;
+  background: #ecf6f0;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.85);
+}
+
+/* Cincin denyut untuk pill EWS live. */
+.twin-ews-live { position: relative; }
+.twin-ews-live::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: twin-ring 2.2s ease-out infinite;
+}
+@keyframes twin-ring {
+  0% { opacity: 0.8; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.25, 1.5); }
+}
+
+/* Skala EWS 4 level. */
+.twin-ews { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding-top: 8px; }
+.twin-ews__step { --i: 0; position: relative; display: flex; flex-direction: column; gap: 6px; }
+.twin-ews__bar {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(110, 231, 183, 0.12);
+}
+.twin-ews__bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ews-c) 60%, transparent), var(--ews-c));
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--i) * 0.12s);
+}
+.twin-ews__step.is-reached .twin-ews__bar::before { transform: scaleX(1); }
+.twin-ews__step.is-active .twin-ews__bar {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ews-c) 55%, transparent), 0 0 14px color-mix(in srgb, var(--ews-c) 50%, transparent);
+}
+.twin-ews__step.is-active .twin-ews__bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -45%;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.8), transparent);
+  animation: twin-ews-sweep 2s ease-in-out infinite;
+}
+.twin-ews__step.is-active::before {
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  border-top: 6px solid var(--ews-c);
+  border-right: 5px solid transparent;
+  border-left: 5px solid transparent;
+  filter: drop-shadow(0 0 4px var(--ews-c));
+  transform: translateX(-50%);
+  animation: twin-ews-bob 1.6s ease-in-out infinite;
+}
+.twin-ews__label {
+  color: var(--tw-ink-mute);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: color 0.3s;
+}
+.twin-ews__step.is-reached .twin-ews__label { color: var(--tw-ink-soft); }
+.twin-ews__step.is-active .twin-ews__label { color: var(--ews-c); }
+@keyframes twin-ews-sweep { 0% { left: -45%; } 100% { left: 100%; } }
+@keyframes twin-ews-bob { 50% { transform: translate(-50%, -2px); } }
+
+/* Gelombang muka air di penampang. */
+.twin-wave { animation: twin-wave 2.4s linear infinite; }
+@keyframes twin-wave { from { transform: translateX(0); } to { transform: translateX(40px); } }
+
+/* Garis penunjuk saat callout digeser ke atas, dan callout yang disembunyikan. */
+.twin-label::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  height: var(--lead, 0px);
+  border-left: 1px dashed color-mix(in srgb, var(--c) 75%, transparent);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.twin-label {
+  position: relative;
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.15s, border-color 0.15s, opacity 0.25s;
+}
+.twin-label::after { transition: height 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* Wadah posisi CSS2D: tanpa transisi. Tanpa will-change: puluhan layer kompositor di atas canvas WebGL
+   membuat frame canvas kadang tampil sebagian (pita hitam); twin referensi juga tidak memakainya. */
+.twin-label-anchor { pointer-events: none; }
+.twin-label.is-hidden { opacity: 0; pointer-events: none; }
+
+
+.twin-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(110, 231, 183, 0.25);
+  border-top-color: var(--tw-accent);
+  border-radius: 50%;
+  animation: twin-spin 0.9s linear infinite;
+}
+@keyframes twin-spin { to { transform: rotate(360deg); } }

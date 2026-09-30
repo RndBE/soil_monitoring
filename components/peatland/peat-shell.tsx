@@ -20,8 +20,8 @@ export function PeatShell({
       <PeatSidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <PeatHeader title={title} subtitle={subtitle} />
-        <main className="flex-1 overflow-y-auto px-5 py-4">
-          <div className="flex flex-col gap-4">{children}</div>
+        <main className="peat-scroll flex-1 overflow-y-auto bg-[radial-gradient(120%_60%_at_50%_-10%,rgba(16,185,129,0.06),transparent_60%)] px-3 py-4 sm:px-5">
+          <div className="mx-auto flex w-full max-w-[1920px] flex-col gap-4">{children}</div>
         </main>
       </div>
     </div>

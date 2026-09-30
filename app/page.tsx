@@ -21,15 +21,15 @@ export default function Home() {
         <AlertCenter />
       </div>
 
-      {/* CCTV */}
-      <CctvPanel />
-
-      {/* Charts */}
+      {/* Charts — analitik dulu, CCTV sesudahnya */}
       <div className="grid gap-4 xl:grid-cols-3">
         <WaterTableChart />
         <RainfallCorrelationChart />
         <FireRiskChart />
       </div>
+
+      {/* CCTV */}
+      <CctvPanel />
 
       {/* Tables */}
       <div className="grid gap-4 xl:grid-cols-3">

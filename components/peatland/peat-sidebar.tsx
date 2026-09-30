@@ -6,7 +6,9 @@ import { usePathname } from "next/navigation"
 import { toast } from "sonner"
 import {
   BellIcon,
+  BoxIcon,
   ChevronRightIcon,
+  MenuIcon,
   DropletIcon,
   FileTextIcon,
   FlameIcon,
@@ -20,7 +22,8 @@ import {
   SproutIcon,
 } from "lucide-react"
 
-import { stations } from "@/lib/peatland/mock-data"
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import { dashboardMeta, stations } from "@/lib/peatland/mock-data"
 import { cn } from "@/lib/utils"
 import { BrandLogo } from "./brand-logo"
 
@@ -29,12 +32,14 @@ type NavItem = {
   label: string
   icon: React.ReactNode
   href: string
+  badge?: string
   children?: NavChild[]
 }
 
 const nav: NavItem[] = [
   { label: "Overview", icon: <LayoutDashboardIcon className="size-[18px]" />, href: "/" },
   { label: "Map View", icon: <MapIcon className="size-[18px]" />, href: "/map-view" },
+  { label: "Digital Twin", icon: <BoxIcon className="size-[18px]" />, href: "/digital-twin", badge: "3D" },
   {
     label: "Peat Monitoring",
     icon: <GaugeIcon className="size-[18px]" />,
@@ -85,11 +90,12 @@ function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`)
 }
 
-export function PeatSidebar() {
+/** Isi sidebar (brand, navigasi, kartu stasiun, update terakhir) — dipakai desktop & drawer HP. */
+function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname() ?? "/"
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [refreshing, setRefreshing] = useState(false)
-  const [lastUpdate, setLastUpdate] = useState("10 Sep 2024 09:37 AM")
+  const [lastUpdate, setLastUpdate] = useState(dashboardMeta.lastUpdate)
 
   const handleRefresh = () => {
     if (refreshing) return
@@ -103,9 +109,9 @@ export function PeatSidebar() {
   }
 
   return (
-    <aside className="hidden w-[210px] shrink-0 flex-col border-r border-white/5 bg-[#0c120f] lg:flex">
+    <>
       {/* Brand */}
-      <Link href="/" className="flex items-center gap-2.5 px-4 py-4">
+      <Link href="/" onClick={onNavigate} className="flex items-center gap-2.5 px-4 py-4">
         <BrandLogo className="size-9 shrink-0 drop-shadow-[0_2px_6px_rgba(0,0,0,0.4)]" />
         <div className="grid leading-tight">
           <span className="text-[11.5px] font-bold tracking-wide text-white">PEATLAND &amp; PLANTATION</span>
@@ -114,7 +120,7 @@ export function PeatSidebar() {
       </Link>
 
       {/* Nav */}
-      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-2">
+      <nav className="peat-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-2" aria-label="Menu utama">
         {nav.map((item) => {
           const active = isActive(pathname, item.href)
           if (item.children) {
@@ -124,6 +130,7 @@ export function PeatSidebar() {
               <div key={item.label}>
                 <button
                   onClick={() => setOpenGroups((s) => ({ ...s, [item.href]: !open }))}
+                  aria-expanded={open}
                   className={cn(
                     "group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                     groupActive
@@ -145,6 +152,8 @@ export function PeatSidebar() {
                         <Link
                           key={c.href}
                           href={c.href}
+                          onClick={onNavigate}
+                          aria-current={cActive ? "page" : undefined}
                           className={cn(
                             "rounded-md px-3 py-1.5 text-[12px] transition-colors",
                             cActive
@@ -165,6 +174,8 @@ export function PeatSidebar() {
             <Link
               key={item.label}
               href={item.href}
+              onClick={onNavigate}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
                 active
@@ -176,6 +187,11 @@ export function PeatSidebar() {
                 {item.icon}
               </span>
               <span className="flex-1 text-left">{item.label}</span>
+              {item.badge && (
+                <span className="rounded-[5px] border border-emerald-400/30 bg-emerald-500/10 px-1 py-px font-mono text-[9px] font-bold tracking-[0.08em] text-emerald-300">
+                  {item.badge}
+                </span>
+              )}
             </Link>
           )
         })}
@@ -223,6 +239,33 @@ export function PeatSidebar() {
           <RefreshCwIcon className={cn("size-3.5", refreshing && "animate-spin")} />
         </button>
       </div>
+    </>
+  )
+}
+
+export function PeatSidebar() {
+  return (
+    <aside className="hidden w-[210px] shrink-0 flex-col border-r border-white/5 bg-[#0c120f] lg:flex">
+      <SidebarBody />
     </aside>
+  )
+}
+
+/** Tombol menu + drawer navigasi untuk layar < lg (sidebar desktop tersembunyi). */
+export function MobileNav() {
+  const [open, setOpen] = useState(false)
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger
+        aria-label="Buka menu"
+        className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-white/80 transition-colors hover:bg-white/[0.08] lg:hidden"
+      >
+        <MenuIcon className="size-4" />
+      </SheetTrigger>
+      <SheetContent side="left" className="w-[250px] gap-0 border-white/10 bg-[#0c120f] p-0 text-white">
+        <SheetTitle className="sr-only">Menu</SheetTitle>
+        <SidebarBody onNavigate={() => setOpen(false)} />
+      </SheetContent>
+    </Sheet>
   )
 }

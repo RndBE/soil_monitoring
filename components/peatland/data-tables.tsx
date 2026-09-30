@@ -1,34 +1,32 @@
 "use client"
 
-import {
-  boreholeStatus,
-  peatMonitoring,
-  plantationHealth,
-  type NdviRow,
-  type StatusLevel,
-} from "@/lib/peatland/mock-data"
+import { boreholeStatus, plantationHealth, waterTableTrend, type NdviRow } from "@/lib/peatland/mock-data"
+import { ewsFromMoisture, ewsFromWaterTable } from "@/lib/peatland/digital-twin"
+import { formatStationValue, stationsOfType, type Station, type StationLevel } from "@/lib/peatland/stations"
 import { matchesBlock, scaleNumber } from "@/lib/peatland/filter-logic"
 import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
-import { Panel, ViewAll } from "./panel"
+import { OpenInTwin } from "./open-in-twin"
+import { Panel, PanelHeader, TableScroll, ViewAll, tableRow, tableTd, tableTh } from "./panel"
+import { EwsPill, levelColor } from "./status"
 
-const emptyTd = "px-3 py-6 text-center text-[12px] text-white/40"
+// Dashboard menampilkan 5 baris terparah; daftar lengkap ada di halaman masing-masing.
+const MAX_ROWS = 5
+const emptyTd = "px-3 py-6 text-center text-[12px] text-white/50"
 
-const statusStyle: Record<StatusLevel, { text: string; dot: string; label: string }> = {
-  normal: { text: "text-emerald-400", dot: "bg-emerald-500", label: "Normal" },
-  warning: { text: "text-amber-400", dot: "bg-amber-500", label: "Warning" },
-  critical: { text: "text-red-400", dot: "bg-red-500", label: "Critical" },
-  offline: { text: "text-white/45", dot: "bg-slate-500", label: "Offline" },
-}
+// Urutan keparahan: Awas paling atas, lalu Siaga, Waspada, offline, Normal.
+const SEVERITY: Record<StationLevel, number> = { awas: 0, siaga: 1, waspada: 2, offline: 3, normal: 4 }
 
-function StatusPill({ status }: { status: StatusLevel }) {
-  const s = statusStyle[status]
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] font-medium", s.text)}>
-      <span className={cn("size-1.5 rounded-full", s.dot)} />
-      {s.label}
-    </span>
-  )
+type Row = Station & { shown: number | null; lvl: StationLevel }
+
+/** Bacaan diskalakan per estate; level EWS dihitung ulang dari bacaan yang tampil. */
+function scaledRows(stations: Station[], estate: string, levelOf: (v: number) => StationLevel): Row[] {
+  return stations
+    .map((s) => {
+      const shown = s.value == null ? null : scaleNumber(s.value, estate)
+      return { ...s, shown, lvl: shown == null ? ("offline" as const) : levelOf(shown) }
+    })
+    .sort((a, b) => SEVERITY[a.lvl] - SEVERITY[b.lvl] || (a.shown ?? 0) - (b.shown ?? 0))
 }
 
 function Sparkline({ data, color }: { data: number[]; color: string }) {
@@ -37,112 +35,160 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
   const range = max - min || 1
   const w = 56
   const h = 18
-  const pts = data
-    .map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`)
-    .join(" ")
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(" ")
+  const fmt = (v: number) => `${v < 0 ? "−" : ""}${Math.abs(v)}`
   return (
-    <svg width={w} height={h} className="overflow-visible">
+    <svg width={w} height={h} className="overflow-visible" role="img" aria-label={`${fmt(data[0])} → ${fmt(data[data.length - 1])} cm`}>
       <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
 
-const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35"
-const td = "px-3 py-2 text-[12px]"
+// Tren 3 hari (6 titik per 12 jam). Borehole yang punya deret di mock-data memakainya;
+// sisanya mengikuti bentuk rata-rata estate 7→10 Sep, diskalakan ke bacaan live.
+const avgTail = waterTableTrend.slice(-4).map((d) => d.value)
+function trendOf(code: string, live: number): number[] {
+  const known = boreholeStatus.find((b) => b.id === code)?.trend
+  if (known) return known
+  const first = avgTail[0]
+  const last = avgTail[avgTail.length - 1]
+  return Array.from({ length: 6 }, (_, i) => Math.round((live * (first + ((last - first) * i) / 5)) / last))
+}
+
+function TwinTh() {
+  return <th className={cn(tableTh, "text-right")}>Twin</th>
+}
 
 export function BoreholeTable() {
   const { estate, division } = useDashboardFilters()
-  const rows = boreholeStatus.filter((r) => matchesBlock(r.location, division))
+  const all = scaledRows(
+    stationsOfType("borehole").filter((s) => matchesBlock(s.block, division)),
+    estate,
+    ewsFromWaterTable
+  )
+  const rows = all.slice(0, MAX_ROWS)
   return (
     <Panel>
-      <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
-        <h3 className="text-[14px] font-semibold text-white">Borehole Status</h3>
-        <ViewAll />
-      </div>
-      <table className="w-full text-left">
-        <thead>
-          <tr>
-            <th className={th}>ID</th>
-            <th className={th}>Location</th>
-            <th className={th}>Water Level</th>
-            <th className={th}>Status</th>
-            <th className={cn(th, "text-right")}>Trend (3D)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const s = statusStyle[r.status]
-            const sparkColor =
-              r.status === "critical" ? "#ef4444" : r.status === "warning" ? "#f59e0b" : "#22c55e"
-            return (
-              <tr key={r.id} className="border-t border-white/5 hover:bg-white/[0.03]">
-                <td className={cn(td, "font-medium text-white/85")}>{r.id}</td>
-                <td className={cn(td, "text-white/55")}>{r.location}</td>
-                <td className={cn(td, s.text, "font-medium")}>{scaleNumber(r.waterLevel, estate)} cm</td>
-                <td className={td}>
-                  <StatusPill status={r.status} />
-                </td>
-                <td className={cn(td, "flex justify-end")}>
-                  <Sparkline data={r.trend.map((v) => scaleNumber(v, estate))} color={sparkColor} />
+      <PanelHeader
+        kicker="EWS · Borehole"
+        title="Borehole Status"
+        subtitle={`Water level, cm below surface · ${rows.length} of ${all.length}, most severe first`}
+        action={<ViewAll href="/borehole-monitoring" />}
+      />
+      <TableScroll>
+        <table className="w-full text-left">
+          <thead>
+            <tr>
+              <th className={tableTh}>ID</th>
+              <th className={tableTh}>Block</th>
+              <th className={tableTh}>Water Level</th>
+              <th className={tableTh}>Status</th>
+              <th className={cn(tableTh, "text-right")}>3-Day Trend</th>
+              <TwinTh />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const color = levelColor(r.lvl)
+              return (
+                <tr key={r.code} className={tableRow}>
+                  <td className={cn(tableTd, "whitespace-nowrap font-mono font-medium text-white/85")}>{r.code}</td>
+                  <td className={cn(tableTd, "whitespace-nowrap text-white/60")}>{r.block}</td>
+                  <td className={cn(tableTd, "whitespace-nowrap font-medium tabular-nums")} style={{ color }}>
+                    {formatStationValue({ value: r.shown, unit: r.unit })}
+                  </td>
+                  <td className={tableTd}>
+                    <EwsPill level={r.lvl} pulse={r.lvl === "awas"} />
+                  </td>
+                  <td className={tableTd}>
+                    <div className="flex justify-end">
+                      {r.shown != null && (
+                        <Sparkline data={trendOf(r.code, r.value ?? 0).map((v) => scaleNumber(v, estate))} color={color} />
+                      )}
+                    </div>
+                  </td>
+                  <td className={cn(tableTd, "text-right")}>
+                    <OpenInTwin variant="icon" asset={r.code} />
+                  </td>
+                </tr>
+              )
+            })}
+            {rows.length === 0 && (
+              <tr className={tableRow}>
+                <td className={emptyTd} colSpan={6}>
+                  No boreholes in {division}
                 </td>
               </tr>
-            )
-          })}
-          {rows.length === 0 && (
-            <tr className="border-t border-white/5">
-              <td className={emptyTd} colSpan={5}>
-                Tidak ada borehole di {division}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+            )}
+          </tbody>
+        </table>
+      </TableScroll>
     </Panel>
   )
 }
 
 export function PeatTable() {
   const { estate, division } = useDashboardFilters()
-  const rows = peatMonitoring.filter((r) => matchesBlock(r.block, division))
+  const all = scaledRows(
+    stationsOfType("peat-station").filter((s) => matchesBlock(s.block, division)),
+    estate,
+    ewsFromMoisture
+  )
+  const rows = all.slice(0, MAX_ROWS)
   return (
     <Panel>
-      <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
-        <h3 className="text-[14px] font-semibold text-white">
-          Peat Monitoring <span className="text-[11px] font-normal text-white/35">(Latest)</span>
-        </h3>
-        <ViewAll />
-      </div>
-      <table className="w-full text-left">
-        <thead>
-          <tr>
-            <th className={th}>Station</th>
-            <th className={th}>Peat Depth</th>
-            <th className={th}>Soil Moisture</th>
-            <th className={th}>Soil Temp</th>
-            <th className={cn(th, "text-right")}>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.station} className="border-t border-white/5 hover:bg-white/[0.03]">
-              <td className={cn(td, "font-medium text-white/85")}>{r.station}</td>
-              <td className={cn(td, "text-white/70")}>{scaleNumber(r.peatDepth, estate)} cm</td>
-              <td className={cn(td, "text-white/70")}>{scaleNumber(r.soilMoisture, estate)}%</td>
-              <td className={cn(td, "text-white/70")}>{scaleNumber(r.soilTemp, estate, 1).toFixed(1)}°C</td>
-              <td className={cn(td, "text-right")}>
-                <StatusPill status={r.status} />
-              </td>
+      <PanelHeader
+        kicker="Telemetri · Gambut"
+        title="Peat Monitoring"
+        subtitle={`Latest · moisture %, depth cm, temp °C · ${rows.length} of ${all.length}`}
+        action={<ViewAll href="/peat-monitoring" />}
+      />
+      <TableScroll>
+        <table className="w-full text-left">
+          <thead>
+            <tr>
+              <th className={tableTh}>Station</th>
+              <th className={tableTh}>Peat Depth</th>
+              <th className={tableTh}>Soil Moisture</th>
+              <th className={tableTh}>Soil Temp</th>
+              <th className={tableTh}>Status</th>
+              <TwinTh />
             </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr className="border-t border-white/5">
-              <td className={emptyTd} colSpan={5}>
-                Tidak ada stasiun peat di {division}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.code} className={tableRow}>
+                <td className={cn(tableTd, "whitespace-nowrap")}>
+                  <span className="block font-mono font-medium text-white/85">{r.code}</span>
+                  <span className="block text-[10.5px] text-white/50">{r.block}</span>
+                </td>
+                <td className={cn(tableTd, "whitespace-nowrap tabular-nums text-white/70")}>
+                  {r.peatDepth != null ? `${scaleNumber(r.peatDepth, estate)} cm` : "—"}
+                </td>
+                <td className={cn(tableTd, "whitespace-nowrap font-medium tabular-nums")} style={{ color: levelColor(r.lvl) }}>
+                  {r.shown != null ? `${r.shown}%` : "OFFLINE"}
+                </td>
+                <td className={cn(tableTd, "whitespace-nowrap tabular-nums text-white/70")}>
+                  {r.soilTemp != null ? `${scaleNumber(r.soilTemp, estate, 1).toFixed(1)}°C` : "—"}
+                </td>
+                <td className={tableTd}>
+                  <EwsPill level={r.lvl} pulse={r.lvl === "awas"} />
+                </td>
+                <td className={cn(tableTd, "text-right")}>
+                  <OpenInTwin variant="icon" asset={r.code} />
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr className={tableRow}>
+                <td className={emptyTd} colSpan={6}>
+                  No peat stations in {division}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </TableScroll>
     </Panel>
   )
 }
@@ -165,47 +211,57 @@ export function NdviTable() {
   const rows = plantationHealth.filter((r) => matchesBlock(r.block, division))
   return (
     <Panel>
-      <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
-        <h3 className="text-[14px] font-semibold text-white">Plantation Health (NDVI)</h3>
-        <ViewAll />
-      </div>
-      <table className="w-full text-left">
-        <thead>
-          <tr>
-            <th className={th}>Block</th>
-            <th className={th}>NDVI</th>
-            <th className={th}>Health Status</th>
-            <th className={cn(th, "text-right")}>Area (Ha)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const ndvi = Math.min(1, scaleNumber(r.ndvi, estate, 2))
-            return (
-              <tr key={r.block} className="border-t border-white/5 hover:bg-white/[0.03]">
-                <td className={cn(td, "font-medium text-white/85")}>{r.block}</td>
-                <td className={cn(td, "font-medium text-white/80")}>{ndvi.toFixed(2)}</td>
-                <td className={td}>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
-                      <div className={cn("h-full rounded-full", ndviBar[r.healthTone])} style={{ width: `${ndvi * 100}%` }} />
-                    </div>
-                    <span className={cn("text-[11.5px] font-medium", ndviText[r.healthTone])}>{r.health}</span>
-                  </div>
-                </td>
-                <td className={cn(td, "text-right text-white/70")}>{scaleNumber(r.area, estate).toLocaleString()}</td>
-              </tr>
-            )
-          })}
-          {rows.length === 0 && (
-            <tr className="border-t border-white/5">
-              <td className={emptyTd} colSpan={4}>
-                Tidak ada blok plantation di {division}
-              </td>
+      <PanelHeader
+        kicker="Sentinel-2 · NDVI"
+        title="Plantation Health (NDVI)"
+        subtitle="Per block · pass 8 Sep 2024 · area in ha"
+        action={<ViewAll href="/plantation-health" />}
+      />
+      <TableScroll>
+        <table className="w-full text-left">
+          <thead>
+            <tr>
+              <th className={tableTh}>Block</th>
+              <th className={tableTh}>NDVI</th>
+              <th className={tableTh}>Health Status</th>
+              <th className={cn(tableTh, "text-right")}>Area (ha)</th>
+              <TwinTh />
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const ndvi = Math.min(1, scaleNumber(r.ndvi, estate, 2))
+              return (
+                <tr key={r.block} className={tableRow}>
+                  <td className={cn(tableTd, "whitespace-nowrap font-medium text-white/85")}>{r.block}</td>
+                  <td className={cn(tableTd, "font-medium tabular-nums text-white/80")}>{ndvi.toFixed(2)}</td>
+                  <td className={tableTd}>
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-white/10">
+                        <div className={cn("h-full rounded-full", ndviBar[r.healthTone])} style={{ width: `${ndvi * 100}%` }} />
+                      </div>
+                      <span className={cn("whitespace-nowrap text-[11.5px] font-medium", ndviText[r.healthTone])}>{r.health}</span>
+                    </div>
+                  </td>
+                  <td className={cn(tableTd, "text-right tabular-nums text-white/70")}>
+                    {scaleNumber(r.area, estate).toLocaleString("id-ID")}
+                  </td>
+                  <td className={cn(tableTd, "text-right")}>
+                    <OpenInTwin variant="icon" block={r.block} layer="ndvi" />
+                  </td>
+                </tr>
+              )
+            })}
+            {rows.length === 0 && (
+              <tr className={tableRow}>
+                <td className={emptyTd} colSpan={5}>
+                  No plantation blocks in {division}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </TableScroll>
     </Panel>
   )
 }

@@ -2,12 +2,13 @@
 
 import { useState } from "react"
 import dynamic from "next/dynamic"
-import { ChevronDownIcon, XIcon } from "lucide-react"
+import { BoxIcon, LayersIcon, MapIcon, XIcon } from "lucide-react"
 
 import { mapLayers } from "@/lib/peatland/mock-data"
 import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
 import { Panel } from "./panel"
+import { TwinPreview } from "./twin-preview"
 
 const EstateMapLeaflet = dynamic(() => import("./estate-map-leaflet"), {
   ssr: false,
@@ -18,12 +19,13 @@ const EstateMapLeaflet = dynamic(() => import("./estate-map-leaflet"), {
   ),
 })
 
+// Sama persis dengan warna marker di estate-map-leaflet (markerColor).
 const legend = [
-  { label: "Normal", color: "bg-emerald-500" },
-  { label: "Warning", color: "bg-amber-500" },
-  { label: "Critical", color: "bg-red-500" },
-  { label: "Offline", color: "bg-slate-500" },
-  { label: "Water Gate", color: "bg-sky-500" },
+  { label: "Normal", color: "#22c55e" },
+  { label: "Warning", color: "#f59e0b" },
+  { label: "Critical", color: "#ef4444" },
+  { label: "Offline", color: "#64748b" },
+  { label: "Water Gate", color: "#38bdf8" },
 ]
 
 type EstateMapProps = {
@@ -39,6 +41,8 @@ type EstateMapProps = {
   subtitle?: string
   /** Aksi tambahan di kanan header (mis. tombol Export). */
   headerAction?: React.ReactNode
+  /** Tampilkan tombol "2D Peta | 3D Twin" (twin 3D live di kartu yang sama). Default true. */
+  twinToggle?: boolean
 }
 
 export function EstateMap({
@@ -49,7 +53,9 @@ export function EstateMap({
   title = "Estate Map Overview",
   subtitle,
   headerAction,
+  twinToggle = true,
 }: EstateMapProps = {}) {
+  const [mode, setMode] = useState<"2d" | "3d">("2d")
   const isControlled = controlledLayers != null
   const { division } = useDashboardFilters()
 
@@ -82,31 +88,68 @@ export function EstateMap({
 
   return (
     <Panel className="h-full">
-      <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-2 pt-3.5">
         <div className="min-w-0">
-          <h3 className="truncate text-[14px] font-semibold text-white">{title}</h3>
-          {subtitle && <p className="truncate text-[11px] text-white/40">{subtitle}</p>}
+          <span className="kicker mb-1 flex items-center gap-1.5 text-emerald-300/70">
+            {mode === "3d" ? <BoxIcon className="size-3" /> : <MapIcon className="size-3" />}
+            {mode === "3d" ? "Digital twin · 3D" : "Peta estate · 2D"}
+          </span>
+          <h3 className="truncate text-[14px] font-semibold tracking-[-0.01em] text-white">{title}</h3>
+          {subtitle && <p className="truncate text-[11px] text-white/50">{subtitle}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {headerAction}
-          <button
-            onClick={toggleAll}
-            className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11.5px] font-medium text-white/80 transition-colors hover:bg-white/[0.08]"
-          >
-            {allOn ? "All Layers" : `${activeCount}/${mapLayers.length} Layers`}
-            <ChevronDownIcon className="size-3.5 text-white/40" />
-          </button>
+          {twinToggle && (
+            <div role="group" aria-label="Mode tampilan" className="grid grid-cols-2 gap-[3px] rounded-[9px] border border-white/10 bg-black/30 p-[3px]">
+              {(
+                [
+                  { key: "2d", label: "2D Peta", icon: MapIcon },
+                  { key: "3d", label: "3D Twin", icon: BoxIcon },
+                ] as const
+              ).map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => setMode(o.key)}
+                  aria-pressed={mode === o.key}
+                  className={cn(
+                    "inline-flex items-center justify-center gap-1.5 rounded-[7px] px-2.5 py-1 font-mono text-[10.5px] font-bold tracking-[0.04em] transition-colors",
+                    mode === o.key
+                      ? "bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400/35"
+                      : "text-white/55 hover:text-white/85"
+                  )}
+                >
+                  <o.icon className="size-3" />
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {mode === "2d" && (
+            <button
+              onClick={toggleAll}
+              aria-pressed={allOn}
+              title={allOn ? "Sembunyikan semua layer" : "Tampilkan semua layer"}
+              className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11.5px] font-medium text-white/80 transition-colors hover:bg-white/[0.08]"
+            >
+              <LayersIcon className="size-3.5 text-white/50" />
+              {allOn ? "Semua layer" : `${activeCount}/${mapLayers.length} layer`}
+            </button>
+          )}
         </div>
       </div>
 
       <div className="relative min-h-[400px] flex-1 overflow-hidden">
         {/* Peta Leaflet (basemap gelap, satu tema dengan dashboard) */}
-        <div className="absolute inset-0">
-          <EstateMapLeaflet layers={layers} division={division} />
-        </div>
+        {mode === "3d" ? (
+          <TwinPreview />
+        ) : (
+          <div className="absolute inset-0">
+            <EstateMapLeaflet layers={layers} division={division} />
+          </div>
+        )}
 
         {/* Map Layers panel */}
-        {showLayerPanel && (panelOpen ? (
+        {mode === "2d" && showLayerPanel && (panelOpen ? (
           <div className="pointer-events-auto absolute left-3 top-3 z-[500] w-[185px] rounded-lg border border-white/10 bg-black/65 p-3 backdrop-blur-sm">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[11.5px] font-semibold text-white/90">Map Layers</span>
@@ -152,14 +195,24 @@ export function EstateMap({
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-4 border-t border-white/8 px-4 py-2.5">
-        {legend.map((l) => (
-          <div key={l.label} className="flex items-center gap-1.5">
-            <span className={cn("size-2.5 rounded-full", l.color)} />
-            <span className="text-[11px] text-white/55">{l.label}</span>
+      {mode === "2d" && (
+        <div className="flex flex-wrap items-center gap-4 border-t border-white/8 px-4 py-2.5">
+          {legend.map((l) => (
+            <div key={l.label} className="flex items-center gap-1.5">
+              <span className="size-2.5 rounded-full" style={{ background: l.color }} />
+              <span className="text-[11px] text-white/55">{l.label}</span>
+            </div>
+          ))}
+          <div className="flex items-center gap-1.5">
+            <span className="w-4 border-t-2 border-dashed border-[#5eead4]" />
+            <span className="text-[11px] text-white/55">Batas KHG</span>
           </div>
-        ))}
-      </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-4 border-t-2 border-[#38bdf8]" />
+            <span className="text-[11px] text-white/55">Sungai &amp; parit</span>
+          </div>
+        </div>
+      )}
     </Panel>
   )
 }

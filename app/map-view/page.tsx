@@ -1,201 +1,379 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import {
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-} from "recharts"
+import { useMemo, useRef, useState } from "react"
+import Link from "next/link"
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts"
 import {
   ActivityIcon,
+  ArrowDownIcon,
+  ArrowUpDownIcon,
+  ArrowUpIcon,
+  BoxIcon,
   ClockIcon,
   LayersIcon,
   MapPinnedIcon,
   RadioTowerIcon,
   WifiOffIcon,
-  type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import { PeatShell } from "@/components/peatland/peat-shell"
-import { Panel, PanelHeader, ViewAll } from "@/components/peatland/panel"
+import { Panel, PanelHeader, TableScroll, ViewAll, tableRow, tableTd, tableTh } from "@/components/peatland/panel"
 import { EstateMap } from "@/components/peatland/estate-map"
+import { StatTile } from "@/components/peatland/stat-tile"
+import { EwsPill, StatusDot, levelColor, levelLabel, type Tone } from "@/components/peatland/status"
+import { tooltipStyle } from "@/components/peatland/chart-theme"
+import { OpenInTwin } from "@/components/peatland/open-in-twin"
+import { ASSET_TYPE_META, TWIN_BLOCKS } from "@/lib/peatland/digital-twin"
+import { blockPoints, canalLines, markerPoints, type MarkerKind, type MarkerLayer } from "@/lib/peatland/map-points"
+import { mapLayers, plantationHealth, stations as fleet } from "@/lib/peatland/mock-data"
+import {
+  STATIONS,
+  STATION_TYPE_LABEL,
+  formatLatLng,
+  formatStationValue,
+  stationByCode,
+  type Station,
+  type StationLevel,
+  type StationSignal,
+} from "@/lib/peatland/stations"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { ALL_BLOCKS, DIVISION_OPTIONS, matchesBlock } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
-type Tone = "normal" | "warning" | "critical" | "info" | "offline"
+const TYPES = Object.keys(STATION_TYPE_LABEL) as MarkerLayer[]
+const isStationType = (key: string): key is MarkerLayer => key in STATION_TYPE_LABEL
 
-const valueTone: Record<Tone, string> = {
-  normal: "text-emerald-400",
-  warning: "text-amber-400",
-  critical: "text-red-400",
-  info: "text-sky-400",
-  offline: "text-white/55",
+// Warna layer di legenda: jenis aset pakai ASSET_TYPE_META (sama dengan twin 3D),
+// kanal & label block mengikuti gaya peta.
+const LAYER_COLOR: Record<string, string> = {
+  ...Object.fromEntries(TYPES.map((t) => [t, ASSET_TYPE_META[t].color])),
+  canal: "#7dd3fc",
+  "plantation-block": "#6ee7b7",
 }
 
-const iconTone: Record<Tone, string> = {
-  normal: "bg-emerald-500/12 text-emerald-400 ring-emerald-500/20",
-  warning: "bg-amber-500/12 text-amber-400 ring-amber-500/20",
-  critical: "bg-red-500/12 text-red-400 ring-red-500/20",
-  info: "bg-sky-500/12 text-sky-400 ring-sky-500/20",
-  offline: "bg-slate-500/12 text-white/55 ring-slate-500/20",
+// Warna marker peta 2D (sama dengan estate-map-leaflet): marker diwarnai STATUS,
+// pintu air selalu biru apa pun statusnya.
+const MARKER_STATUS: { kind: MarkerKind; label: string; color: string }[] = [
+  { kind: "normal", label: "Normal", color: "#22c55e" },
+  { kind: "warning", label: "Warning", color: "#f59e0b" },
+  { kind: "critical", label: "Critical", color: "#ef4444" },
+  { kind: "offline", label: "Offline", color: "#64748b" },
+  { kind: "gate", label: "Water Gate", color: "#38bdf8" },
+]
+
+const LEVEL_FILTERS: (StationLevel | "all")[] = ["all", "normal", "waspada", "siaga", "awas", "offline"]
+const SEVERITY: Record<StationLevel, number> = { normal: 0, waspada: 1, siaga: 2, awas: 3, offline: 4 }
+
+const READING_LABEL: Record<MarkerLayer, string> = {
+  borehole: "Water level",
+  "water-station": "Water table",
+  "rain-gauge": "Rainfall 24h",
+  "water-gate": "Gate opening",
+  "peat-station": "Soil moisture",
+  "fire-hotspot": "Fire radiative power",
 }
 
-function StatTile({
+// Halaman modul per jenis stasiun (tautan dari panel detail).
+const TYPE_PAGE: Partial<Record<MarkerLayer, string>> = {
+  borehole: "/borehole-monitoring",
+  "water-station": "/borehole-monitoring",
+  "rain-gauge": "/weather-rainfall",
+  "peat-station": "/peat-monitoring",
+  "fire-hotspot": "/fire-risk",
+}
+
+const SIGNAL_TONE: Record<StationSignal, Tone> = { Good: "normal", Fair: "warning", Weak: "warning", "No signal": "offline" }
+
+// Waktu live dashboard: 10 Sep 2024 09:37.
+const LIVE_DAY = 10
+const LIVE_MIN = 9 * 60 + 37
+
+/** "09:36" (hari live) atau "8 Sep 13:20" → menit relatif 10 Sep 00:00; tak dikenal = sangat lama. */
+function seenMinutes(s: string): number {
+  const m = s.match(/^(?:(\d+) Sep )?(\d{1,2}):(\d{2})$/)
+  if (!m) return -1e9
+  const day = m[1] ? Number(m[1]) : LIVE_DAY
+  return (day - LIVE_DAY) * 1440 + Number(m[2]) * 60 + Number(m[3])
+}
+
+function seenAgo(s: string): string {
+  const t = seenMinutes(s)
+  if (t <= -1e9) return "—"
+  const d = LIVE_MIN - t
+  if (d <= 1) return "just now"
+  if (d < 60) return `${d} min ago`
+  if (d < 1440) return `${Math.floor(d / 60)} h ago`
+  return `${Math.floor(d / 1440)} d ago`
+}
+
+type SortKey = "code" | "type" | "block" | "level" | "lastSeen"
+type SortState = { key: SortKey; dir: "asc" | "desc" }
+
+const SORTERS: Record<SortKey, (a: Station, b: Station) => number> = {
+  code: (a, b) => a.code.localeCompare(b.code, "en", { numeric: true }),
+  type: (a, b) => STATION_TYPE_LABEL[a.type].localeCompare(STATION_TYPE_LABEL[b.type]),
+  block: (a, b) => a.block.localeCompare(b.block),
+  level: (a, b) => SEVERITY[a.level] - SEVERITY[b.level],
+  lastSeen: (a, b) => seenMinutes(a.lastSeen) - seenMinutes(b.lastSeen),
+}
+
+const chipClass = (on: boolean) =>
+  cn(
+    "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+    on ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30" : "text-white/55 hover:bg-white/[0.04] hover:text-white/80"
+  )
+
+function SortTh({
   label,
-  value,
-  unit,
-  icon: Icon,
-  tone,
-  delta,
+  k,
+  sort,
+  onSort,
+  className,
 }: {
   label: string
-  value: string
-  unit?: string
-  icon: LucideIcon
-  tone: Tone
-  delta?: string
+  k: SortKey
+  sort: SortState
+  onSort: (k: SortKey) => void
+  className?: string
 }) {
+  const active = sort.key === k
+  const Icon = !active ? ArrowUpDownIcon : sort.dir === "asc" ? ArrowUpIcon : ArrowDownIcon
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-white/8 bg-gradient-to-b from-white/[0.04] to-transparent p-4 ring-1 ring-white/5 transition-colors hover:border-white/15">
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45">{label}</span>
-        <span className={cn("inline-flex size-8 items-center justify-center rounded-lg ring-1", iconTone[tone])}>
-          <Icon className="size-4" />
-        </span>
-      </div>
-      <div className="flex items-baseline gap-1.5">
-        <span className={cn("text-[28px] font-bold leading-none tracking-tight", valueTone[tone])}>{value}</span>
-        {unit && <span className="text-[13px] font-medium text-white/40">{unit}</span>}
-      </div>
-      {delta && (
-        <div className="flex items-center gap-1 border-t border-white/5 pt-2 text-[11px]">
-          <span className="text-white/40">{delta}</span>
-        </div>
-      )}
+    <th className={cn(tableTh, className)} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={cn("inline-flex items-center gap-1 uppercase transition-colors hover:text-white/85", active && "text-emerald-300/90")}
+      >
+        {label}
+        <Icon className="size-3" />
+      </button>
+    </th>
+  )
+}
+
+function Fact({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className={cn("min-w-0", wide && "col-span-2")}>
+      <dt className="kicker text-white/50">{label}</dt>
+      <dd className="mt-0.5 truncate text-[12px] text-white/85">{children}</dd>
     </div>
   )
 }
 
-// key selaras dengan layer aset di EstateMap / map-points (lihat [[map-points]]).
-const layers = [
-  { key: "borehole", name: "Borehole", color: "#38bdf8", count: 34 },
-  { key: "water-station", name: "Water Table Station", color: "#22c55e", count: 28 },
-  { key: "rain-gauge", name: "Rain Gauge", color: "#84cc16", count: 12 },
-  { key: "water-gate", name: "Water Gate", color: "#fb923c", count: 9 },
-  { key: "canal", name: "Canal", color: "#64748b", count: 22 },
-  { key: "peat-station", name: "Peat Monitoring Station", color: "#f59e0b", count: 18 },
-  { key: "fire-hotspot", name: "Fire Hotspot", color: "#ef4444", count: 4 },
-  { key: "plantation-block", name: "Plantation Block", color: "#a3e635", count: 12 },
-]
-
-const statusBreakdown = [
-  { label: "Normal", count: 96, color: "#22c55e" },
-  { label: "Warning", count: 24, color: "#f59e0b" },
-  { label: "Critical", count: 11, color: "#ef4444" },
-  { label: "Offline", count: 8, color: "#64748b" },
-]
-
-type StationStatus = "normal" | "warning" | "critical" | "offline"
-
-const statusStyle: Record<StationStatus, { text: string; dot: string; label: string }> = {
-  normal: { text: "text-emerald-400", dot: "bg-emerald-500", label: "Normal" },
-  warning: { text: "text-amber-400", dot: "bg-amber-500", label: "Warning" },
-  critical: { text: "text-red-400", dot: "bg-red-500", label: "Critical" },
-  offline: { text: "text-white/45", dot: "bg-slate-500", label: "Offline" },
-}
-
-const initialStations: {
-  id: string
-  type: string
-  block: string
-  coords: string
-  status: StationStatus
-  updated: string
-}[] = [
-  { id: "BH-014", type: "Borehole", block: "Block A-3", coords: "0.421°S, 102.118°E", status: "normal", updated: "2 min ago" },
-  { id: "WTS-007", type: "Water Table Station", block: "Block B-1", coords: "0.438°S, 102.097°E", status: "warning", updated: "3 min ago" },
-  { id: "RG-002", type: "Rain Gauge", block: "Block C-2", coords: "0.402°S, 102.143°E", status: "normal", updated: "1 min ago" },
-  { id: "PMS-021", type: "Peat Monitoring Station", block: "Block A-1", coords: "0.456°S, 102.081°E", status: "critical", updated: "5 min ago" },
-  { id: "WTG-005", type: "Water Gate", block: "Block D-4", coords: "0.389°S, 102.162°E", status: "normal", updated: "2 min ago" },
-  { id: "BH-029", type: "Borehole", block: "Block B-3", coords: "0.447°S, 102.109°E", status: "offline", updated: "47 min ago" },
-  { id: "PMS-013", type: "Peat Monitoring Station", block: "Block C-1", coords: "0.411°S, 102.134°E", status: "warning", updated: "4 min ago" },
-  { id: "RG-006", type: "Rain Gauge", block: "Block D-2", coords: "0.395°S, 102.151°E", status: "normal", updated: "1 min ago" },
-]
-
-const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35"
-const td = "px-3 py-2 text-[12px]"
-
-function StatusPill({ status }: { status: StationStatus }) {
-  const s = statusStyle[status]
+/** Panel detail stasiun terpilih: bacaan, baterai, sinyal, terakhir terlihat, catatan + tautan twin. */
+function StationDetail({ s }: { s: Station | undefined }) {
+  if (!s) {
+    return (
+      <Panel>
+        <PanelHeader kicker="Stasiun · detail" icon={RadioTowerIcon} title="Station Detail" subtitle="Select a station in the directory" />
+      </Panel>
+    )
+  }
+  const meta = ASSET_TYPE_META[s.type]
+  const page = TYPE_PAGE[s.type]
+  const batteryColor = s.battery >= 50 ? "#46d78f" : s.battery >= 20 ? "#ffd27a" : "#ff7a66"
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] font-medium", s.text)}>
-      <span className={cn("size-1.5 rounded-full", s.dot)} />
-      {s.label}
-    </span>
+    <Panel>
+      <PanelHeader
+        kicker={`Stasiun · ${meta.short}`}
+        icon={RadioTowerIcon}
+        title={s.code}
+        subtitle={`${STATION_TYPE_LABEL[s.type]} · ${s.block}`}
+        action={<EwsPill level={s.level} pulse={s.level === "awas" || s.level === "offline"} />}
+      />
+      <div className="flex flex-col gap-3 px-4 pb-4">
+        <div className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2.5">
+          <span className="kicker text-white/50">{READING_LABEL[s.type]}</span>
+          <div className="mt-1 font-mono text-[24px] font-bold leading-none tabular-nums" style={{ color: levelColor(s.level) }}>
+            {formatStationValue(s)}
+          </div>
+          {s.note && <p className="mt-1.5 text-[11.5px] text-white/60">{s.note}</p>}
+        </div>
+
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+          <Fact label="Battery">
+            <span className="flex items-center gap-2">
+              <span className="h-1.5 w-12 overflow-hidden rounded-full bg-white/10">
+                <span className="block h-full rounded-full" style={{ width: `${s.battery}%`, background: batteryColor }} />
+              </span>
+              <span className="tabular-nums">{s.battery}%</span>
+            </span>
+          </Fact>
+          <Fact label="Signal">
+            <StatusDot tone={SIGNAL_TONE[s.signal]} label={s.signal} />
+          </Fact>
+          <Fact label="Last seen">
+            {s.lastSeen} <span className="text-white/50">· {seenAgo(s.lastSeen)}</span>
+          </Fact>
+          <Fact label="Twin model">{s.twinId ? `3D asset · ${s.twinId}` : `Block view · ${s.block}`}</Fact>
+          {s.peatDepth != null && <Fact label="Peat depth">{s.peatDepth} cm</Fact>}
+          {s.soilTemp != null && <Fact label="Soil temp">{s.soilTemp.toFixed(1)} °C</Fact>}
+          <Fact label="Coordinates" wide>
+            <span className="font-mono text-[11.5px]">{formatLatLng(s.lat, s.lng)}</span>
+          </Fact>
+        </dl>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <OpenInTwin asset={s.code} label={s.twinId ? "Buka di Twin" : `Buka ${s.block} di Twin`} />
+          {page && (
+            <Link href={page} className="text-[11.5px] font-medium text-emerald-400 transition-colors hover:text-emerald-300">
+              Open module
+            </Link>
+          )}
+        </div>
+      </div>
+    </Panel>
   )
 }
-
-const statusFilters = [
-  { key: "all", label: "All" },
-  { key: "normal", label: "Normal" },
-  { key: "warning", label: "Warning" },
-  { key: "critical", label: "Critical" },
-  { key: "offline", label: "Offline" },
-] as const
-
-type StatusFilter = (typeof statusFilters)[number]["key"]
 
 export default function MapViewPage() {
-  const totalMarkers = statusBreakdown.reduce((sum, s) => sum + s.count, 0)
+  const { division, setDivision } = useDashboardFilters()
 
   // Visibilitas layer — sumber kebenaran tunggal yang mengendalikan peta (EstateMap)
-  // sekaligus tampilan Layer Legend di sidebar. true = tampil.
+  // sekaligus Layer Legend. true = tampil.
   const [visibleLayers, setVisibleLayers] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(layers.map((l) => [l.key, true]))
+    Object.fromEntries(mapLayers.map((l) => [l.key, true]))
   )
-  const activeLayerCount = layers.filter((l) => visibleLayers[l.key]).length
+  const activeLayerCount = mapLayers.filter((l) => visibleLayers[l.key]).length
 
-  const toggleLayer = (key: string) => {
-    setVisibleLayers((prev) => ({ ...prev, [key]: !prev[key] }))
-  }
+  const toggleLayer = (key: string) => setVisibleLayers((prev) => ({ ...prev, [key]: !prev[key] }))
+  const toggleAllLayers = (target: boolean) => setVisibleLayers(Object.fromEntries(mapLayers.map((l) => [l.key, target])))
 
-  const toggleAllLayers = (target: boolean) => {
-    setVisibleLayers(Object.fromEntries(layers.map((l) => [l.key, target])))
-  }
-
-  // Station directory: filter + sync feedback
-  const [stations, setStations] = useState(initialStations)
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
-
-  const visibleStations = useMemo(
-    () => (statusFilter === "all" ? stations : stations.filter((s) => s.status === statusFilter)),
-    [stations, statusFilter]
+  // Marker yang benar-benar digambar peta (layer tampil & lolos filter division).
+  const drawnMarkers = useMemo(
+    () => markerPoints.filter((m) => visibleLayers[m.layer] && matchesBlock(m.block, division)),
+    [visibleLayers, division]
   )
+  const markerBreakdown = MARKER_STATUS.map((s) => ({ ...s, count: drawnMarkers.filter((m) => m.kind === s.kind).length }))
+
+  // Registri stasiun (subset armada estate) yang lolos filter division.
+  const registry = useMemo(() => STATIONS.filter((s) => matchesBlock(s.block, division)), [division])
+  const registryOffline = STATIONS.filter((s) => s.level === "offline")
+
+  const legendRows = mapLayers.map((l) => {
+    if (isStationType(l.key)) {
+      const onMap = markerPoints.filter((m) => m.layer === l.key && matchesBlock(m.block, division)).length
+      const total = registry.filter((s) => s.type === l.key).length
+      return { ...l, color: LAYER_COLOR[l.key], count: `${onMap} / ${total}` }
+    }
+    if (l.key === "canal") return { ...l, color: LAYER_COLOR.canal, count: String(canalLines.length) }
+    return { ...l, color: LAYER_COLOR[l.key] ?? "#6ee7b7", count: String(blockPoints.filter((b) => matchesBlock(b.label, division)).length) }
+  })
+
+  const areaRows = plantationHealth.filter((p) => matchesBlock(p.block, division))
+  const area = areaRows.reduce((a, p) => a + p.area, 0)
+  const totalArea = plantationHealth.reduce((a, p) => a + p.area, 0)
+
+  // Station directory: filter jenis/status/block, urutan, dan stasiun terpilih.
+  const [typeFilter, setTypeFilter] = useState<MarkerLayer | "all">("all")
+  const [levelFilter, setLevelFilter] = useState<StationLevel | "all">("all")
+  const [sort, setSort] = useState<SortState>({ key: "code", dir: "asc" })
+  const [selectedCode, setSelectedCode] = useState("BH-07")
+  const [synced, setSynced] = useState(false)
+  const directoryRef = useRef<HTMLDivElement>(null)
+
+  const directory = useMemo(() => {
+    const rows = registry.filter(
+      (s) => (typeFilter === "all" || s.type === typeFilter) && (levelFilter === "all" || s.level === levelFilter)
+    )
+    const cmp = SORTERS[sort.key]
+    const sign = sort.dir === "asc" ? 1 : -1
+    return [...rows].sort((a, b) => sign * cmp(a, b) || SORTERS.code(a, b))
+  }, [registry, typeFilter, levelFilter, sort])
+
+  const typeCount = (t: MarkerLayer | "all") =>
+    registry.filter((s) => (t === "all" || s.type === t) && (levelFilter === "all" || s.level === levelFilter)).length
+  const levelCount = (l: StationLevel | "all") =>
+    registry.filter((s) => (l === "all" || s.level === l) && (typeFilter === "all" || s.type === typeFilter)).length
+
+  const onSort = (key: SortKey) =>
+    setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "level" ? "desc" : "asc" }))
+
+  const showOffline = () => {
+    setTypeFilter("all")
+    setLevelFilter("offline")
+    directoryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
 
   const handleSync = () => {
     const id = toast.loading("Menyinkronkan stasiun…")
     setTimeout(() => {
-      setStations((prev) => prev.map((s) => ({ ...s, updated: "baru saja" })))
-      toast.success("Data stasiun diperbarui", { id })
+      setSynced(true)
+      toast.success("Data stasiun diperbarui", { id, description: `${STATIONS.length} stasiun registri · 10 Sep 2024 09:37` })
     }, 900)
   }
 
-  const handleStationClick = (id: string, status: StationStatus) => {
-    toast(`Stasiun ${id}`, { description: `Status: ${statusStyle[status].label}` })
-  }
+  const selected = stationByCode(selectedCode)
+
+  // Cakupan twin: stasiun registri yang dimodelkan di scene 3D, per jenis.
+  const modelled = registry.filter((s) => s.twinId != null).length
+  const coverage = TYPES.map((t) => {
+    const all = registry.filter((s) => s.type === t)
+    return { type: t, total: all.length, inTwin: all.filter((s) => s.twinId != null).length }
+  })
 
   return (
     <PeatShell title="Map View" subtitle="Estate-wide Asset & Sensor Map">
-      {/* KPI row */}
+      {/* KPI row — armada estate (mock stations) vs subset registri twin dilabeli jelas */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Total Stations" value="139" icon={RadioTowerIcon} tone="info" delta="across 12 blocks" />
-        <StatTile label="Online" value="128" icon={ActivityIcon} tone="normal" delta="92.1% uptime" />
-        <StatTile label="Offline" value="11" icon={WifiOffIcon} tone="critical" delta="needs attention" />
-        <StatTile label="Layers Active" value={String(activeLayerCount)} icon={LayersIcon} tone="info" delta={`of ${layers.length} layers`} />
-        <StatTile label="Area Monitored" value="5,110" unit="ha" icon={MapPinnedIcon} tone="normal" delta="estate coverage" />
-        <StatTile label="Last Sync" value="2 min" unit="ago" icon={ClockIcon} tone="normal" delta="auto every 5 min" />
+        <StatTile
+          label="Total Stations"
+          value={String(fleet.total)}
+          icon={RadioTowerIcon}
+          tone="info"
+          status={`Estate-wide fleet · ${TWIN_BLOCKS.length} blocks`}
+          foot={`Registered in twin registry: ${STATIONS.length}`}
+        />
+        <StatTile
+          label="Online"
+          value={String(fleet.online)}
+          unit={`/ ${fleet.total}`}
+          icon={ActivityIcon}
+          tone="normal"
+          status={`${fleet.percent}% uptime`}
+          foot="LoRaWAN · SCADA · GSM"
+        />
+        <StatTile
+          label="Offline"
+          value={String(fleet.offline)}
+          icon={WifiOffIcon}
+          tone="offline"
+          status="Needs attention"
+          foot={`${registryOffline.length} in registry (${registryOffline.map((s) => s.code).join(", ")})`}
+          onClick={showOffline}
+        />
+        <StatTile
+          label="Layers Active"
+          value={String(activeLayerCount)}
+          unit={`/ ${mapLayers.length}`}
+          icon={LayersIcon}
+          tone="info"
+          foot={`${drawnMarkers.length} markers drawn on map`}
+        />
+        <StatTile
+          label="Area Monitored"
+          value={area.toLocaleString("en-US")}
+          unit="ha"
+          icon={MapPinnedIcon}
+          tone="normal"
+          foot={
+            division === ALL_BLOCKS
+              ? `${areaRows.length} blocks · KHG Giam Siak Kecil`
+              : `${division} · of ${totalArea.toLocaleString("en-US")} ha`
+          }
+          href="/plantation-health"
+        />
+        <StatTile
+          label="Last Sync"
+          value="09:37"
+          unit="WIB"
+          icon={ClockIcon}
+          tone="normal"
+          status={synced ? "Synced just now" : "10 Sep 2024"}
+          foot="Auto every 5 min"
+        />
       </div>
 
       {/* Main map row */}
@@ -203,7 +381,7 @@ export default function MapViewPage() {
         <div className="h-[520px]">
           <EstateMap
             title="Estate Asset Map"
-            subtitle="Live sensor & infrastructure positions"
+            subtitle={`Live sensor & infrastructure positions · ${drawnMarkers.length} markers`}
             headerAction={<ViewAll label="Export" onClick={() => toast.info("Mengekspor peta…")} />}
             layers={visibleLayers}
             onToggleLayer={toggleLayer}
@@ -214,50 +392,52 @@ export default function MapViewPage() {
 
         <div className="grid grid-cols-1 gap-4">
           <Panel>
-            <PanelHeader title="Layer Legend" subtitle="Visible map layers" />
-            <div className="flex flex-col gap-0.5 px-2 pb-3">
-              {layers.map((l) => {
+            <PanelHeader kicker="Peta · layer" icon={LayersIcon} title="Layer Legend" subtitle="Dot = asset type · click to show / hide" />
+            <div className="flex items-center justify-between px-4 pb-1">
+              <span className="kicker text-white/50">Layer</span>
+              <span className="kicker text-white/50">On map / registry</span>
+            </div>
+            <div className="flex flex-col gap-0.5 px-2 pb-2">
+              {legendRows.map((l) => {
                 const hidden = !visibleLayers[l.key]
                 return (
                   <button
                     key={l.key}
+                    type="button"
                     onClick={() => toggleLayer(l.key)}
+                    aria-pressed={!hidden}
                     className={cn(
-                      "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.03]",
-                      hidden && "opacity-40"
+                      "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04]",
+                      hidden && "opacity-45"
                     )}
                   >
-                    <span className="flex items-center gap-2.5 text-[12px] text-white/70">
+                    <span className="flex items-center gap-2.5 text-[12px] text-white/75">
                       <span
-                        className={cn("size-2.5 rounded-full ring-2 ring-white/5", hidden && "ring-white/10")}
+                        className="size-2.5 rounded-full"
                         style={{ background: hidden ? "transparent" : l.color, boxShadow: hidden ? `inset 0 0 0 1.5px ${l.color}` : undefined }}
                       />
-                      {l.name}
+                      {l.label}
                     </span>
-                    <span className="text-[12px] font-semibold tabular-nums text-white/85">{l.count}</span>
+                    <span className="font-mono text-[11.5px] font-semibold tabular-nums text-white/85">{l.count}</span>
                   </button>
                 )
               })}
             </div>
+            <p className="border-t border-white/[0.06] px-4 py-2.5 text-[11px] text-white/50">
+              Markers on the map are coloured by status (see Quick Stats). Only stations modelled in the twin are drawn; the
+              directory lists the full registry.
+            </p>
           </Panel>
 
           <Panel>
-            <PanelHeader title="Quick Stats" subtitle="Markers by status" />
+            <PanelHeader kicker="Peta · status marker" title="Quick Stats" subtitle="Markers drawn on the map, by status colour" />
             <div className="flex items-center gap-3 px-4 pb-4 pt-1">
               <div className="relative h-[110px] w-[110px] shrink-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Tooltip
-                      contentStyle={{
-                        background: "#10201a",
-                        border: "1px solid rgba(255,255,255,0.12)",
-                        borderRadius: 8,
-                        fontSize: 12,
-                      }}
-                      labelStyle={{ color: "rgba(255,255,255,0.6)" }}
-                    />
+                    <Tooltip {...tooltipStyle} formatter={(v) => `${v} markers`} />
                     <Pie
-                      data={statusBreakdown}
+                      data={markerBreakdown.filter((s) => s.count > 0)}
                       dataKey="count"
                       nameKey="label"
                       innerRadius={32}
@@ -265,22 +445,24 @@ export default function MapViewPage() {
                       paddingAngle={2}
                       stroke="none"
                     >
-                      {statusBreakdown.map((s) => (
-                        <Cell key={s.label} fill={s.color} />
-                      ))}
+                      {markerBreakdown
+                        .filter((s) => s.count > 0)
+                        .map((s) => (
+                          <Cell key={s.kind} fill={s.color} />
+                        ))}
                     </Pie>
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-[18px] font-bold leading-none text-white">{totalMarkers}</span>
-                  <span className="text-[9px] uppercase tracking-wide text-white/40">markers</span>
+                  <span className="text-[18px] font-bold leading-none text-white">{drawnMarkers.length}</span>
+                  <span className="text-[9px] uppercase tracking-wide text-white/50">markers</span>
                 </div>
               </div>
               <div className="flex flex-1 flex-col gap-1.5">
-                {statusBreakdown.map((s) => (
-                  <div key={s.label} className="flex items-center justify-between text-[12px]">
-                    <span className="flex items-center gap-2 text-white/65">
-                      <span className="size-1.5 rounded-full" style={{ background: s.color }} />
+                {markerBreakdown.map((s) => (
+                  <div key={s.kind} className="flex items-center justify-between text-[12px]">
+                    <span className="flex items-center gap-2 text-white/70">
+                      <span className="size-2 rounded-full" style={{ background: s.color }} />
                       {s.label}
                     </span>
                     <span className="font-semibold tabular-nums text-white/85">{s.count}</span>
@@ -288,82 +470,214 @@ export default function MapViewPage() {
                 ))}
               </div>
             </div>
+            <p className="border-t border-white/[0.06] px-4 py-2.5 text-[11px] text-white/50">
+              Water gates always use a blue marker; their live status (e.g. WTG-02 offline) is in the directory.
+            </p>
           </Panel>
         </div>
       </div>
 
-      {/* Station directory */}
-      <div className="grid grid-cols-1 gap-4">
+      {/* Station directory + detail */}
+      <div ref={directoryRef} className="grid scroll-mt-4 grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
         <Panel>
-          <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
-            <div>
-              <h3 className="text-[14px] font-semibold text-white">Station Directory</h3>
-              <p className="text-[11px] text-white/40">All registered sensors & infrastructure assets</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSync}
-                className="text-[11.5px] font-medium text-emerald-400 transition-colors hover:text-emerald-300"
-              >
-                Sync
-              </button>
-              <ViewAll />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5 px-4 pb-2 pt-1">
-            {statusFilters.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => setStatusFilter(f.key)}
-                className={cn(
-                  "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  statusFilter === f.key
-                    ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
-                    : "text-white/45 hover:text-white/70"
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <table className="w-full text-left">
-            <thead>
-              <tr>
-                <th className={th}>ID</th>
-                <th className={th}>Type</th>
-                <th className={th}>Block</th>
-                <th className={th}>Coordinates</th>
-                <th className={th}>Status</th>
-                <th className={cn(th, "text-right")}>Last Update</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleStations.map((s) => (
-                <tr
-                  key={s.id}
-                  onClick={() => handleStationClick(s.id, s.status)}
-                  className="cursor-pointer border-t border-white/5 hover:bg-white/[0.03]"
+          <PanelHeader
+            kicker="Registri · stasiun"
+            icon={RadioTowerIcon}
+            title="Station Directory"
+            subtitle={`Twin registry: ${registry.length} of ${fleet.total} estate stations${division === ALL_BLOCKS ? "" : ` · ${division}`}`}
+            action={
+              <>
+                <button
+                  type="button"
+                  onClick={handleSync}
+                  className="text-[11.5px] font-medium text-emerald-400 transition-colors hover:text-emerald-300"
                 >
-                  <td className={cn(td, "font-medium text-white/85")}>{s.id}</td>
-                  <td className={cn(td, "text-white/55")}>{s.type}</td>
-                  <td className={cn(td, "text-white/70")}>{s.block}</td>
-                  <td className={cn(td, "font-mono text-[11px] text-white/55")}>{s.coords}</td>
-                  <td className={td}>
-                    <StatusPill status={s.status} />
-                  </td>
-                  <td className={cn(td, "text-right text-white/55")}>{s.updated}</td>
-                </tr>
+                  Sync
+                </button>
+                <ViewAll href="/alerts" label="Alerts" />
+              </>
+            }
+          />
+
+          <div className="flex flex-col gap-2 px-4 pb-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="kicker mr-1 w-12 text-white/50">Type</span>
+              {(["all", ...TYPES] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTypeFilter(t)}
+                  aria-pressed={typeFilter === t}
+                  title={t === "all" ? "All types" : STATION_TYPE_LABEL[t]}
+                  className={chipClass(typeFilter === t)}
+                >
+                  {t !== "all" && <span className="size-2 rounded-full" style={{ background: ASSET_TYPE_META[t].color }} />}
+                  {t === "all" ? "All" : ASSET_TYPE_META[t].short}
+                  <span className="tabular-nums text-white/50">{typeCount(t)}</span>
+                </button>
               ))}
-              {visibleStations.length === 0 && (
-                <tr className="border-t border-white/5">
-                  <td className={cn(td, "text-white/40")} colSpan={6}>
-                    Tidak ada stasiun untuk filter ini
-                  </td>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="kicker mr-1 w-12 text-white/50">Status</span>
+              {LEVEL_FILTERS.map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => setLevelFilter(l)}
+                  aria-pressed={levelFilter === l}
+                  className={chipClass(levelFilter === l)}
+                >
+                  {l !== "all" && <span className="size-2 rounded-full" style={{ background: levelColor(l) }} />}
+                  {l === "all" ? "All" : levelLabel(l)}
+                  <span className="tabular-nums text-white/50">{levelCount(l)}</span>
+                </button>
+              ))}
+              <label className="ml-auto flex items-center gap-2">
+                <span className="kicker text-white/50">Block</span>
+                <select
+                  value={division}
+                  onChange={(e) => setDivision(e.target.value)}
+                  className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[11.5px] text-white/85 outline-none focus-visible:border-emerald-400/50"
+                >
+                  {DIVISION_OPTIONS.map((o) => (
+                    <option key={o} value={o} className="bg-[#0c1612]">
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <TableScroll>
+            <table className="w-full min-w-[860px] text-left">
+              <thead>
+                <tr>
+                  <SortTh label="Code" k="code" sort={sort} onSort={onSort} />
+                  <SortTh label="Type" k="type" sort={sort} onSort={onSort} />
+                  <SortTh label="Block" k="block" sort={sort} onSort={onSort} />
+                  <th className={tableTh}>Coordinates</th>
+                  <th className={cn(tableTh, "text-right")}>Reading</th>
+                  <SortTh label="Status" k="level" sort={sort} onSort={onSort} />
+                  <SortTh label="Last Seen" k="lastSeen" sort={sort} onSort={onSort} className="text-right" />
+                  <th className={cn(tableTh, "text-right")}>Twin</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {directory.map((s) => {
+                  const active = s.code === selectedCode
+                  return (
+                    <tr
+                      key={s.code}
+                      onClick={() => setSelectedCode(s.code)}
+                      aria-selected={active}
+                      className={cn(tableRow, "cursor-pointer", active && "bg-emerald-400/[0.07]")}
+                    >
+                      <td className={cn(tableTd, "whitespace-nowrap")}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setSelectedCode(s.code)
+                          }}
+                          className={cn(
+                            "font-mono text-[12px] font-semibold transition-colors hover:text-emerald-300",
+                            active ? "text-emerald-300" : "text-white/90"
+                          )}
+                        >
+                          {s.code}
+                        </button>
+                        {s.twinId && (
+                          <span className="ml-1.5 rounded border border-emerald-400/25 px-1 font-mono text-[9px] font-bold text-emerald-300/85">
+                            3D
+                          </span>
+                        )}
+                      </td>
+                      <td className={cn(tableTd, "whitespace-nowrap text-white/70")}>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="size-2 rounded-full" style={{ background: ASSET_TYPE_META[s.type].color }} />
+                          {STATION_TYPE_LABEL[s.type]}
+                        </span>
+                      </td>
+                      <td className={cn(tableTd, "whitespace-nowrap text-white/75")}>{s.block}</td>
+                      <td className={cn(tableTd, "whitespace-nowrap font-mono text-[11px] text-white/55")}>{formatLatLng(s.lat, s.lng)}</td>
+                      <td className={cn(tableTd, "whitespace-nowrap text-right font-mono tabular-nums text-white/85")}>
+                        {formatStationValue(s)}
+                      </td>
+                      <td className={tableTd}>
+                        <EwsPill level={s.level} pulse={s.level === "awas" || s.level === "offline"} />
+                      </td>
+                      <td className={cn(tableTd, "whitespace-nowrap text-right")}>
+                        <span className="text-white/80">{s.lastSeen}</span>
+                        <span className="ml-1.5 text-[11px] text-white/50">{seenAgo(s.lastSeen)}</span>
+                      </td>
+                      <td className={cn(tableTd, "text-right")}>
+                        <OpenInTwin asset={s.code} variant="icon" />
+                      </td>
+                    </tr>
+                  )
+                })}
+                {directory.length === 0 && (
+                  <tr className="border-t border-white/[0.06]">
+                    <td className={cn(tableTd, "text-white/50")} colSpan={8}>
+                      Tidak ada stasiun untuk filter ini
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </TableScroll>
         </Panel>
+
+        <div className="grid grid-cols-1 content-start gap-4">
+          <StationDetail s={selected} />
+
+          <Panel>
+            <PanelHeader
+              kicker="Digital twin · 3D"
+              icon={BoxIcon}
+              title="Twin Coverage"
+              subtitle="Registry stations modelled in the 3D scene"
+              action={<OpenInTwin variant="link" label="Open twin" block={division === ALL_BLOCKS ? undefined : division} />}
+            />
+            <div className="px-4 pb-4">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[24px] font-bold leading-none tabular-nums text-emerald-300">{modelled}</span>
+                <span className="text-[12px] text-white/55">
+                  / {registry.length} stations in 3D{registry.length ? ` · ${Math.round((modelled / registry.length) * 100)}%` : ""}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-col gap-1">
+                {coverage.map((c) => (
+                  <button
+                    key={c.type}
+                    type="button"
+                    onClick={() => setTypeFilter(c.type)}
+                    title={`Filter directory: ${STATION_TYPE_LABEL[c.type]}`}
+                    className="grid grid-cols-[1fr_72px_36px] items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-white/[0.04]"
+                  >
+                    <span className="flex min-w-0 items-center gap-2 truncate text-[11.5px] text-white/75">
+                      <span className="size-2 shrink-0 rounded-full" style={{ background: ASSET_TYPE_META[c.type].color }} />
+                      {STATION_TYPE_LABEL[c.type]}
+                    </span>
+                    <span className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                      <span
+                        className="block h-full rounded-full"
+                        style={{ width: c.total ? `${(c.inTwin / c.total) * 100}%` : 0, background: ASSET_TYPE_META[c.type].color }}
+                      />
+                    </span>
+                    <span className="text-right font-mono text-[11px] tabular-nums text-white/80">
+                      {c.inTwin}/{c.total}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-white/50">
+                Stations without a 3D model open their block in the twin (3D badge in the directory).
+              </p>
+            </div>
+          </Panel>
+        </div>
       </div>
     </PeatShell>
   )

@@ -26,8 +26,10 @@ function safeNext(value: string | null): string {
   return value
 }
 
+const ERROR_ID = "login-error"
+
 const inputClass =
-  "h-11 rounded-lg border-white/10 bg-white/[0.03] text-[13.5px] text-white placeholder:text-white/25 focus-visible:border-emerald-400/60 focus-visible:ring-emerald-400/20"
+  "h-11 rounded-lg border-white/10 bg-white/[0.03] text-[13.5px] text-white placeholder:text-white/45 focus-visible:border-emerald-400/60 focus-visible:ring-emerald-400/20"
 
 export function LoginForm({ className, ...props }: React.ComponentProps<"form">) {
   const router = useRouter()
@@ -72,13 +74,14 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
         <h1 className="text-[22px] font-bold leading-tight tracking-tight text-white">
           Masuk ke Sistem
         </h1>
-        <p className="text-[12.5px] leading-relaxed text-white/45">
+        <p className="text-[12.5px] leading-relaxed text-white/60">
           Gunakan akun operator estate yang terdaftar untuk membuka dashboard pemantauan.
         </p>
       </div>
 
       {error ? (
         <div
+          id={ERROR_ID}
           role="alert"
           className="flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2.5 text-[12.5px] leading-snug text-red-300"
         >
@@ -88,14 +91,16 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
       ) : null}
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="username" className="text-[11.5px] font-medium text-white/60">
-          Username
+        <Label htmlFor="username" className="text-[11.5px] font-medium text-white/70">
+          Nama pengguna
         </Label>
         <Input
           autoCapitalize="none"
           autoComplete="username"
           autoCorrect="off"
           autoFocus
+          aria-describedby={error ? ERROR_ID : undefined}
+          aria-invalid={error ? true : undefined}
           className={inputClass}
           id="username"
           name="username"
@@ -108,12 +113,14 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="password" className="text-[11.5px] font-medium text-white/60">
-          Password
+        <Label htmlFor="password" className="text-[11.5px] font-medium text-white/70">
+          Kata sandi
         </Label>
         <div className="relative">
           <Input
             autoComplete="current-password"
+            aria-describedby={error ? ERROR_ID : undefined}
+            aria-invalid={error ? true : undefined}
             className={cn(inputClass, "pr-11")}
             id="password"
             name="password"
@@ -126,8 +133,8 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
           <button
             type="button"
             onClick={() => setShowPassword((v) => !v)}
-            aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
-            className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center text-white/35 transition-colors hover:text-white/70"
+            aria-label={showPassword ? "Sembunyikan kata sandi" : "Tampilkan kata sandi"}
+            className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center text-white/55 transition-colors hover:text-white/85"
           >
             {showPassword ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
           </button>

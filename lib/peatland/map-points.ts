@@ -40,11 +40,14 @@ export const markerPoints: {
   { "id": "m17", "kind": "warning", "layer": "rain-gauge", "block": "Block B", "lat": 1.09004, "lng": 101.80245 },
 ]
 
+// Satu label per block, di titik terdalam wilayah block (sel Voronoi sensor ber-block
+// sama, sama dengan label block di scene Digital Twin).
 export const blockPoints: { label: string; lat: number; lng: number }[] = [
-  { "label": "Block A", "lat": 1.32691, "lng": 101.48344 },
-  { "label": "Block C", "lat": 1.02424, "lng": 101.8936 },
-  { "label": "Block E", "lat": 1.12952, "lng": 101.63535 },
-  { "label": "Block E", "lat": 1.12952, "lng": 101.77207 },
+  { "label": "Block A", "lat": 1.089, "lng": 101.865 },
+  { "label": "Block B", "lat": 1.122, "lng": 101.612 },
+  { "label": "Block C", "lat": 1.04, "lng": 101.871 },
+  { "label": "Block D", "lat": 1.215, "lng": 101.568 },
+  { "label": "Block E", "lat": 1.159, "lng": 101.668 },
 ]
 
 // Jaringan kanal — polyline yang menghubungkan titik-titik (semua sudah terjamin

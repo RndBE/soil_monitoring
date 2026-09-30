@@ -2,13 +2,13 @@
 
 /* eslint-disable @next/next/no-img-element -- snapshot CCTV "live", bukan aset statik yang perlu dioptimasi next/image */
 
-import { useEffect, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { ExpandIcon, VideoIcon, VideoOffIcon, XIcon } from "lucide-react"
 
 import { matchesBlock } from "@/lib/peatland/filter-logic"
 import { useDashboardFilters } from "@/lib/peatland/filters"
 import { cn } from "@/lib/utils"
-import { Panel } from "./panel"
+import { Panel, PanelHeader } from "./panel"
 
 type Camera = {
   id: string
@@ -100,6 +100,8 @@ function CameraTile({ cam, time, onOpen }: { cam: Camera; time: string; onOpen: 
     <button
       type="button"
       onClick={onOpen}
+      aria-haspopup="dialog"
+      aria-label={`${cam.id} — ${cam.name}, ${cam.block}${offline ? " (offline)" : ""}`}
       className="group relative aspect-video w-full overflow-hidden rounded-lg bg-black ring-1 ring-white/10 transition-shadow hover:ring-emerald-400/40"
     >
       {offline ? (
@@ -131,42 +133,51 @@ export function CctvPanel() {
   const { division } = useDashboardFilters()
   const time = useLiveClock()
   const [active, setActive] = useState<Camera | null>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const titleId = useId()
 
   const cameras = CAMERAS.filter((c) => matchesBlock(c.block, division))
   const online = cameras.filter((c) => c.status === "online").length
 
-  // Tutup modal dengan Escape
+  // Modal: fokus ke tombol tutup saat dibuka, Esc menutup, Tab tetap di dalam
+  // dialog (satu-satunya kontrol), lalu fokus kembali ke tile pemicu.
   useEffect(() => {
     if (!active) return
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setActive(null)
+    const trigger = document.activeElement as HTMLElement | null
+    closeRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActive(null)
+      else if (e.key === "Tab") {
+        e.preventDefault()
+        closeRef.current?.focus()
+      }
+    }
     window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("keydown", onKey)
+      trigger?.focus()
+    }
   }, [active])
 
   return (
     <Panel>
-      <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3.5">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex size-7 items-center justify-center rounded-lg bg-emerald-500/12 text-emerald-400 ring-1 ring-emerald-500/20">
-            <VideoIcon className="size-4" />
+      <PanelHeader
+        kicker="CCTV · Live snapshot"
+        icon={VideoIcon}
+        title="CCTV Surveillance"
+        subtitle={`${online}/${cameras.length} cameras online · click a feed to enlarge`}
+        action={
+          <span className="flex items-center gap-1.5 rounded-lg border border-white/8 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[11.5px] tabular-nums text-white/70">
+            <span className="cctv-rec size-1.5 rounded-full bg-red-500" />
+            {time || "--:--:--"}
           </span>
-          <div>
-            <h3 className="text-[14px] font-semibold text-white">CCTV Surveillance</h3>
-            <p className="text-[11px] text-white/40">
-              {online}/{cameras.length} kamera online · live snapshot
-            </p>
-          </div>
-        </div>
-        <span className="flex items-center gap-1.5 rounded-lg border border-white/8 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[11.5px] tabular-nums text-white/70">
-          <span className="cctv-rec size-1.5 rounded-full bg-red-500" />
-          {time || "--:--:--"}
-        </span>
-      </div>
+        }
+      />
 
       <div className="px-4 pb-4">
         {cameras.length === 0 ? (
-          <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-white/10 text-[12px] text-white/40">
-            Tidak ada kamera di {division}
+          <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-white/10 text-[12px] text-white/50">
+            No cameras in {division}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -184,9 +195,15 @@ export function CctvPanel() {
           onClick={() => setActive(null)}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
             className="relative w-full max-w-3xl overflow-hidden rounded-xl bg-black ring-1 ring-white/15"
             onClick={(e) => e.stopPropagation()}
           >
+            <h2 id={titleId} className="sr-only">
+              {active.id} — {active.name} · {active.block}
+            </h2>
             <div className="relative aspect-video w-full">
               {active.status === "offline" ? (
                 <div className="cctv-noise absolute inset-0 flex items-center justify-center">
@@ -203,9 +220,10 @@ export function CctvPanel() {
               <FeedOverlay cam={active} time={time} big />
             </div>
             <button
+              ref={closeRef}
               type="button"
               onClick={() => setActive(null)}
-              aria-label="Tutup"
+              aria-label="Tutup tampilan kamera"
               className="absolute right-2.5 top-2.5 inline-flex size-8 items-center justify-center rounded-lg bg-black/55 text-white/80 ring-1 ring-white/15 transition-colors hover:bg-black/80 hover:text-white"
             >
               <XIcon className="size-4" />

@@ -1,5 +1,6 @@
 // Mock data untuk Peatland & Plantation Monitoring Dashboard.
-// Semua angka statis menyesuaikan mockup (9-10 Sep 2024).
+// Semua angka statis menyesuaikan mockup (4–10 Sep 2024, live 10 Sep 09:37).
+// Kode, block, dan koordinat stasiun: lihat [[stations]] (registri tunggal).
 
 export type Severity = "critical" | "warning" | "info"
 export type StatusLevel = "normal" | "warning" | "critical" | "offline"
@@ -9,7 +10,7 @@ export const dashboardMeta = {
   org: "Beacon Engineering",
   estate: "Sei Galuh Estate",
   division: "Block C",
-  dateRange: "9 - 10 Sep 2024",
+  dateRange: "7 hari terakhir",
   weather: { temp: "24°C", condition: "Light Rain" },
   user: { name: "Operator", role: "Peat Management Officer" },
   lastUpdate: "10 Sep 2024 09:37 AM",
@@ -34,8 +35,8 @@ export const kpis: Kpi[] = [
     label: "Water Table Level (Avg)",
     value: "-35",
     unit: "cm",
-    status: "Normal",
-    statusTone: "normal",
+    status: "Waspada · target ≥ −30 cm",
+    statusTone: "warning",
     delta: "3 cm",
     deltaDir: "down",
     deltaTone: "good",
@@ -43,10 +44,10 @@ export const kpis: Kpi[] = [
   },
   {
     key: "borehole-critical",
-    label: "Borehole Critical",
+    label: "Borehole Siaga/Awas",
     value: "3",
     unit: "Stations",
-    status: "Stations",
+    status: "BH-07 · BH-11 · BH-12",
     statusTone: "critical",
     delta: "1",
     deltaDir: "up",
@@ -57,7 +58,7 @@ export const kpis: Kpi[] = [
     key: "fire-risk",
     label: "Fire Risk Index (Estate)",
     value: "82",
-    status: "High",
+    status: "Siaga · naik 5 hari",
     statusTone: "critical",
     delta: "12",
     deltaDir: "up",
@@ -69,7 +70,7 @@ export const kpis: Kpi[] = [
     label: "Rainfall (24h)",
     value: "18.6",
     unit: "mm",
-    status: "Moderate",
+    status: "Rata-rata 6 penakar",
     statusTone: "info",
     delta: "6.4 mm",
     deltaDir: "down",
@@ -80,7 +81,7 @@ export const kpis: Kpi[] = [
     key: "active-alerts",
     label: "Active Alerts",
     value: "7",
-    status: "Alerts",
+    status: "4 kritis · 6 warning",
     statusTone: "warning",
     delta: "2",
     deltaDir: "up",
@@ -116,6 +117,11 @@ export const alerts: AlertRow[] = [
   { time: "08:20", asset: "PMS-03", alert: "Soil moisture low", severity: "warning" },
   { time: "08:10", asset: "BH-03", alert: "Data not received", severity: "info" },
   { time: "08:05", asset: "RG-01", alert: "Rainfall high intensity", severity: "info" },
+  { time: "07:40", asset: "BH-11", alert: "Water level critical", severity: "critical" },
+  { time: "07:05", asset: "PMS-05", alert: "Soil moisture low", severity: "warning" },
+  { time: "06:12", asset: "WTS-03", alert: "Station offline · battery 12%", severity: "warning" },
+  { time: "01:42", asset: "HS-02", alert: "Hotspot detected · VIIRS confidence high", severity: "critical" },
+  { time: "01:42", asset: "HS-01", alert: "Hotspot detected · VIIRS confidence nominal", severity: "warning" },
 ]
 
 export const aiInsight =

@@ -3,9 +3,9 @@
 import { useMemo, useState } from "react"
 import {
   ActivityIcon,
-  ArrowDownIcon,
-  ArrowUpIcon,
   BatteryMediumIcon,
+  BoxIcon,
+  CalendarIcon,
   CheckIcon,
   ChevronDownIcon,
   DownloadIcon,
@@ -14,7 +14,6 @@ import {
   RefreshCwIcon,
   TargetIcon,
   WavesIcon,
-  type LucideIcon,
 } from "lucide-react"
 import {
   Bar,
@@ -32,122 +31,133 @@ import {
 } from "recharts"
 import { toast } from "sonner"
 
-import { Panel, ViewAll } from "@/components/peatland/panel"
+import {
+  WT_BANDS,
+  WT_LINES,
+  axisProps,
+  bandProps,
+  gridProps,
+  lineProps,
+  tooltipStyle,
+  withUnit,
+  type Threshold,
+} from "@/components/peatland/chart-theme"
+import { OpenInTwin } from "@/components/peatland/open-in-twin"
+import { Panel, PanelHeader, TableScroll, ViewAll, tableRow, tableTd, tableTh } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { StatTile } from "@/components/peatland/stat-tile"
+import { EwsPill, StatusDot, levelColor, type Tone } from "@/components/peatland/status"
+import {
+  EWS_META,
+  SCENARIO_PRESETS,
+  TWIN_BLOCKS,
+  TWIN_STREAMS,
+  WT_COMPLIANCE,
+  WT_TARGET,
+  buildHistoryFrames,
+  ewsFromWaterTable,
+  getBlockBaseline,
+  simulateScenario,
+  summarizeFrame,
+  type EwsLevel,
+} from "@/lib/peatland/digital-twin"
 import { useDashboardFilters } from "@/lib/peatland/filters"
-import { matchesBlock, scaleNumber, scaleNumericString } from "@/lib/peatland/filter-logic"
+import { ALL_BLOCKS, DATE_RANGE_OPTIONS, matchesBlock, scaleNumber, sliceSeries } from "@/lib/peatland/filter-logic"
+import { waterTableTrend } from "@/lib/peatland/mock-data"
+import { stationsOfType, type StationLevel, type StationSignal } from "@/lib/peatland/stations"
 import { cn } from "@/lib/utils"
 
-type Tone = "normal" | "warning" | "critical" | "info" | "offline"
+const round1 = (v: number) => Math.round(v * 10) / 10
+const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0)
+/** Angka dengan minus tipografis, mis. "−37" / "−38.1". */
+const fmtNum = (v: number) => `${v < 0 ? "−" : ""}${Math.abs(round1(v))}`
 
-const valueTone: Record<Tone, string> = {
-  normal: "text-emerald-400",
-  warning: "text-amber-400",
-  critical: "text-red-400",
-  info: "text-sky-400",
-  offline: "text-white/45",
+// Histori 4–10 Sep (frame terakhir = live 10 Sep) + prakiraan twin 11–15 Sep.
+const HISTORY_DAYS = waterTableTrend.map((t) => t.day)
+const LIVE_TREND = waterTableTrend[waterTableTrend.length - 1].value
+const FORECAST_DAYS = 5
+const BASELINE_PRESET = SCENARIO_PRESETS.find((p) => p.key === "baseline") ?? SCENARIO_PRESETS[0]
+const NETWORK = TWIN_STREAMS.find((s) => s.label === "Borehole Network")?.value ?? "—"
+
+const TARGET_LINE: Threshold = { level: "normal", y: WT_TARGET, label: "Target · −30 cm" }
+const Y_TICKS = [-70, -60, -50, -40, -30, -20, -10, 0]
+
+const SIGNAL_TONE: Record<StationSignal, Tone> = {
+  Good: "normal",
+  Fair: "warning",
+  Weak: "critical",
+  "No signal": "offline",
 }
 
-const iconTone: Record<Tone, string> = {
-  normal: "bg-emerald-500/12 text-emerald-400 ring-emerald-500/20",
-  warning: "bg-amber-500/12 text-amber-400 ring-amber-500/20",
-  critical: "bg-red-500/12 text-red-400 ring-red-500/20",
-  info: "bg-sky-500/12 text-sky-400 ring-sky-500/20",
-  offline: "bg-slate-500/12 text-white/50 ring-slate-500/20",
+type BoreholeRow = {
+  code: string
+  block: string
+  value: number | null
+  level: StationLevel
+  battery: number
+  signal: StationSignal
+  lastSeen: string
+  /** Muka air harian 4–10 Sep (cm), berakhir di bacaan live. */
+  trend: number[]
 }
 
-const statusDot: Record<Tone, string> = {
-  normal: "bg-emerald-500",
-  warning: "bg-amber-500",
-  critical: "bg-red-500",
-  info: "bg-sky-500",
-  offline: "bg-slate-500",
+type LiveRow = BoreholeRow & { value: number }
+const hasValue = (r: BoreholeRow): r is LiveRow => r.value != null
+const isAlarm = (l: StationLevel) => l === "siaga" || l === "awas"
+
+// Riak kecil deterministik per stasiun (−1…+1 cm) supaya tren tiap borehole tidak identik.
+function wobble(code: string, i: number): number {
+  const seed = [...code].reduce((a, c) => a + c.charCodeAt(0), 0)
+  return ((seed * (i + 3)) % 3) - 1
 }
 
-const statusLabel: Record<Tone, string> = {
-  normal: "Normal",
-  warning: "Warning",
-  critical: "Critical",
-  info: "Info",
-  offline: "Offline",
-}
-
-const axisProps = {
-  tick: { fontSize: 10, fill: "rgba(255,255,255,0.4)" },
-  axisLine: { stroke: "rgba(255,255,255,0.12)" },
-  tickLine: false as const,
-}
-
-const tooltipStyle = {
-  contentStyle: {
-    background: "#10201a",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: 8,
-    fontSize: 12,
-  },
-  labelStyle: { color: "rgba(255,255,255,0.6)" },
-}
-
-function StatTile({
-  label,
-  value,
-  unit,
-  tone,
-  icon: Icon,
-  delta,
-  deltaDir,
-  deltaTone,
-}: {
-  label: string
-  value: string
-  unit?: string
-  tone: Tone
-  icon: LucideIcon
-  delta?: string
-  deltaDir?: "up" | "down"
-  deltaTone?: "good" | "bad" | "neutral"
-}) {
-  const DeltaIcon = deltaDir === "up" ? ArrowUpIcon : ArrowDownIcon
-  const deltaColor =
-    deltaTone === "good" ? "text-emerald-400" : deltaTone === "bad" ? "text-red-400" : "text-white/50"
-  return (
-    <div className="flex flex-col gap-3 rounded-xl border border-white/8 bg-gradient-to-b from-white/[0.04] to-transparent p-4 ring-1 ring-white/5 transition-colors hover:border-white/15">
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45">{label}</span>
-        <span className={cn("inline-flex size-8 items-center justify-center rounded-lg ring-1", iconTone[tone])}>
-          <Icon className="size-4" />
-        </span>
-      </div>
-      <div className="flex items-baseline gap-1.5">
-        <span className={cn("text-[28px] font-bold leading-none tracking-tight", valueTone[tone])}>{value}</span>
-        {unit && <span className="text-[13px] font-medium text-white/40">{unit}</span>}
-      </div>
-      {delta ? (
-        <div className="flex items-center gap-1 border-t border-white/5 pt-2 text-[11px]">
-          <span className="text-white/40">vs yesterday</span>
-          <DeltaIcon className={cn("size-3", deltaColor)} />
-          <span className={cn("font-semibold", deltaColor)}>{delta}</span>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1.5 border-t border-white/5 pt-2 text-[11px]">
-          <span className={cn("size-1.5 rounded-full", statusDot[tone])} />
-          <span className="font-medium text-white/55">{statusLabel[tone]}</span>
-        </div>
-      )}
-    </div>
+// Tren 7 hari mengikuti bentuk tren estate (sama seperti replay twin), berakhir tepat di bacaan live.
+function stationTrend(code: string, value: number): number[] {
+  return waterTableTrend.map((t, i) =>
+    i === waterTableTrend.length - 1 ? value : Math.round((value * t.value) / LIVE_TREND) + wobble(code, i)
   )
 }
 
-function StatusPill({ tone }: { tone: Tone }) {
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] font-medium", valueTone[tone])}>
-      <span className={cn("size-1.5 rounded-full", statusDot[tone])} />
-      {statusLabel[tone]}
-    </span>
-  )
+// Baris tabel dari registri stasiun; muka air ikut faktor estate seperti baseline twin.
+function buildRows(estate: string): BoreholeRow[] {
+  return stationsOfType("borehole").map((s) => {
+    const value = s.value == null ? null : scaleNumber(s.value, estate)
+    return {
+      code: s.code,
+      block: s.block,
+      value,
+      level: value == null ? "offline" : ewsFromWaterTable(value),
+      battery: s.battery,
+      signal: s.signal,
+      lastSeen: s.lastSeen,
+      trend: value == null ? [] : stationTrend(s.code, value),
+    }
+  })
 }
 
+type Forecast = { day: string; value: number }
+
+// Chip ringkas kapan rata-rata muka air menembus −40 cm (PP 57/2016) menurut prakiraan twin.
+function forecastChip(last: number, forecast: Forecast[]): { level: EwsLevel; text: string } {
+  const end = forecast[forecast.length - 1]
+  if (!end) return { level: ewsFromWaterTable(last), text: "Prakiraan twin tidak tersedia" }
+  if (last <= WT_COMPLIANCE) {
+    return {
+      level: ewsFromWaterTable(end.value),
+      text: `Prakiraan twin: sudah di bawah −40 cm · ${fmtNum(end.value)} cm pada ${end.day}`,
+    }
+  }
+  const i = forecast.findIndex((f) => f.value <= WT_COMPLIANCE)
+  if (i >= 0) return { level: "siaga", text: `Prakiraan twin: −40 cm dalam ~${i + 1} hari (${forecast[i].day})` }
+  return {
+    level: ewsFromWaterTable(end.value),
+    text: `Prakiraan twin: tetap di atas −40 cm s/d ${end.day} (${fmtNum(end.value)} cm)`,
+  }
+}
+
+/** Garis tren mini untuk kolom tabel. */
 function Spark({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return <span className="text-[11px] text-white/50">—</span>
   const min = Math.min(...data)
   const max = Math.max(...data)
   const range = max - min || 1
@@ -155,115 +165,139 @@ function Spark({ data, color }: { data: number[]; color: string }) {
   const h = 18
   const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(" ")
   return (
-    <svg width={w} height={h} className="overflow-visible">
+    <svg width={w} height={h} className="overflow-visible" aria-hidden>
       <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
 
-const signalTone: Record<string, string> = {
-  Good: "text-emerald-400",
-  Fair: "text-amber-400",
-  Weak: "text-red-400",
+/** Pemilih rentang tanggal — tersambung ke filter global header. */
+function RangeMenu({ value, onSelect }: { value: string; onSelect: (v: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12.5px] font-medium text-white/75 transition-colors hover:border-white/20"
+      >
+        <CalendarIcon className="size-3.5" />
+        {value}
+        <ChevronDownIcon className="size-3.5" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            role="listbox"
+            className="absolute z-50 mt-1 min-w-full overflow-hidden rounded-lg border border-white/10 bg-[#10201a] py-1 shadow-xl"
+          >
+            {DATE_RANGE_OPTIONS.map((o) => (
+              <button
+                key={o}
+                type="button"
+                role="option"
+                aria-selected={o === value}
+                onClick={() => {
+                  onSelect(o)
+                  setOpen(false)
+                }}
+                className={cn(
+                  "block w-full whitespace-nowrap px-3 py-2 text-left text-[12.5px] hover:bg-white/5",
+                  o === value ? "text-emerald-300" : "text-white/75"
+                )}
+              >
+                {o}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
-const waterTableTrend = [
-  { day: "Mon", value: -27 },
-  { day: "Tue", value: -29 },
-  { day: "Wed", value: -28 },
-  { day: "Thu", value: -32 },
-  { day: "Fri", value: -31 },
-  { day: "Sat", value: -34 },
-  { day: "Sun", value: -35 },
-]
-
-const levelByBorehole = [
-  { id: "BH-07", level: -62, tone: "critical" as Tone },
-  { id: "BH-12", level: -42, tone: "warning" as Tone },
-  { id: "BH-03", level: -28, tone: "normal" as Tone },
-  { id: "BH-01", level: -31, tone: "warning" as Tone },
-  { id: "BH-09", level: -25, tone: "normal" as Tone },
-  { id: "BH-15", level: -38, tone: "warning" as Tone },
-]
-
-const barColor: Record<Tone, string> = {
-  normal: "#22c55e",
-  warning: "#f59e0b",
-  critical: "#ef4444",
-  info: "#38bdf8",
-  offline: "#64748b",
-}
-
-const sparkColor: Record<Tone, string> = {
-  normal: "#22c55e",
-  warning: "#f59e0b",
-  critical: "#ef4444",
-  info: "#38bdf8",
-  offline: "#64748b",
-}
-
-type Borehole = {
-  id: string
-  block: string
-  division: string
-  level: number
-  battery: number
-  signal: string
-  status: Tone
-  trend: number[]
-}
-
-const initialBoreholes: Borehole[] = [
-  { id: "BH-01", block: "Block A-12", division: "Block A", level: -31, battery: 92, signal: "Good", status: "warning", trend: [-28, -30, -31] },
-  { id: "BH-02", block: "Block A-14", division: "Block A", level: -26, battery: 88, signal: "Good", status: "normal", trend: [-24, -25, -26] },
-  { id: "BH-03", block: "Block B-03", division: "Block B", level: -28, battery: 95, signal: "Good", status: "normal", trend: [-27, -28, -28] },
-  { id: "BH-04", block: "Block B-07", division: "Block B", level: -33, battery: 71, signal: "Fair", status: "warning", trend: [-30, -32, -33] },
-  { id: "BH-05", block: "Block C-01", division: "Block C", level: -24, battery: 90, signal: "Good", status: "normal", trend: [-23, -24, -24] },
-  { id: "BH-07", block: "Block C-09", division: "Block C", level: -62, battery: 58, signal: "Weak", status: "critical", trend: [-54, -58, -62] },
-  { id: "BH-09", block: "Block D-04", division: "Block D", level: -25, battery: 96, signal: "Good", status: "normal", trend: [-26, -25, -25] },
-  { id: "BH-12", block: "Block D-11", division: "Block E", level: -42, battery: 64, signal: "Fair", status: "warning", trend: [-38, -40, -42] },
-]
-
-const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35"
-const td = "px-3 py-2 text-[12px]"
-
-const RANGE_OPTIONS = ["Last 7 Days", "Last 14 Days", "Last 30 Days", "This Season"]
-
-type StatusFilter = "all" | "normal" | "warning" | "critical"
+type StatusFilter = "all" | StationLevel
 
 const FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "normal", label: "Normal" },
-  { key: "warning", label: "Warning" },
-  { key: "critical", label: "Critical" },
+  { key: "waspada", label: "Waspada" },
+  { key: "siaga", label: "Siaga" },
+  { key: "awas", label: "Awas" },
 ]
 
+type TrendPoint = { day: string; value?: number; forecast?: number }
+
 export default function BoreholeMonitoringPage() {
-  const { estate, division } = useDashboardFilters()
-  const [range, setRange] = useState(RANGE_OPTIONS[0])
-  const [rangeOpen, setRangeOpen] = useState(false)
+  const { estate, division, dateRange, setDateRange } = useDashboardFilters()
   const [showTargets, setShowTargets] = useState(true)
   const [filter, setFilter] = useState<StatusFilter>("all")
-  const [rows, setRows] = useState<Borehole[]>(initialBoreholes)
+  const [acked, setAcked] = useState<string[]>([])
 
+  const rows = useMemo(() => buildRows(estate), [estate])
+  const divisionRows = useMemo(() => rows.filter((r) => matchesBlock(r.block, division)), [rows, division])
   const visibleRows = useMemo(
-    () =>
-      rows.filter(
-        (r) => matchesBlock(r.division, division) && (filter === "all" || r.status === filter)
-      ),
-    [filter, rows, division]
+    () => divisionRows.filter((r) => filter === "all" || r.level === filter),
+    [divisionRows, filter]
   )
+  const liveRows = useMemo(() => divisionRows.filter(hasValue), [divisionRows])
 
-  const stats = useMemo(
-    () => ({
-      avgWaterTable: scaleNumericString("-35", estate),
-      deepest: scaleNumericString("-62", estate),
-      withinTarget: scaleNumericString("64", estate),
-      activeBoreholes: `${scaleNumber(48, estate)}/${scaleNumber(52, estate)}`,
-      avgBattery: scaleNumericString("87", estate),
-    }),
-    [estate]
-  )
+  // Rata-rata muka air borehole (histori) + lanjutan prakiraan twin skenario Baseline.
+  const trend = useMemo(() => {
+    const history = HISTORY_DAYS.map((day, i) => ({ day, value: round1(avg(liveRows.map((r) => r.trend[i]))) }))
+    const last = history[history.length - 1].value
+    const blocks = TWIN_BLOCKS.filter((b) => matchesBlock(b, division))
+    const baseline = getBlockBaseline(estate)
+    const frames = buildHistoryFrames(baseline)
+    const liveWt = summarizeFrame(frames[frames.length - 1], baseline, blocks).waterTable
+    // Twin memberi perubahan relatif terhadap live; ditempel ke rata-rata borehole agar garis menyambung.
+    const forecast: Forecast[] = simulateScenario(baseline, { ...BASELINE_PRESET.scenario, days: FORECAST_DAYS }).map(
+      (f) => ({ day: f.label, value: round1(last + summarizeFrame(f, baseline, blocks).waterTable - liveWt) })
+    )
+    return { history, forecast, last }
+  }, [liveRows, division, estate])
+
+  const shown = sliceSeries(trend.history, dateRange)
+  const chartData: TrendPoint[] = [
+    ...shown.map((p, i) => (i === shown.length - 1 ? { ...p, forecast: p.value } : p)),
+    ...trend.forecast.map((f) => ({ day: f.day, forecast: f.value })),
+  ]
+  const span =
+    shown.length > 1 ? `${shown[0].day.replace(" Sep", "")}–${shown[shown.length - 1].day}` : shown[0]?.day ?? "—"
+  const chip = forecastChip(trend.last, trend.forecast)
+  const chipColor = EWS_META[chip.level].color
+
+  const stats = useMemo(() => {
+    const values = liveRows.map((r) => r.value)
+    const avgWt = Math.round(avg(values))
+    const alarm = liveRows.filter((r) => isAlarm(r.level))
+    const awas = alarm.filter((r) => r.level === "awas").length
+    const deepest = liveRows.reduce<LiveRow | null>((a, b) => (!a || b.value < a.value ? b : a), null)
+    const inTarget = liveRows.filter((r) => r.value >= WT_TARGET).length
+    const lowBattery = divisionRows.reduce<BoreholeRow | null>((a, b) => (!a || b.battery < a.battery ? b : a), null)
+    return {
+      avgWt,
+      avgLevel: ewsFromWaterTable(avgWt),
+      alarm,
+      awas,
+      alarmSpark: HISTORY_DAYS.map((_, i) => liveRows.filter((r) => isAlarm(ewsFromWaterTable(r.trend[i]))).length),
+      deepest,
+      inTarget,
+      inTargetPct: liveRows.length ? Math.round((inTarget / liveRows.length) * 100) : 0,
+      battery: Math.round(avg(divisionRows.map((r) => r.battery))),
+      lowBattery,
+    }
+  }, [liveRows, divisionRows])
+
+  const wtDelta = round1(trend.history[trend.history.length - 1].value - trend.history[trend.history.length - 2].value)
+  const levelCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: divisionRows.length }
+    for (const r of divisionRows) counts[r.level] = (counts[r.level] ?? 0) + 1
+    return counts
+  }, [divisionRows])
 
   function refresh() {
     const id = toast.loading("Memuat telemetri terbaru…")
@@ -275,45 +309,23 @@ export default function BoreholeMonitoringPage() {
     setTimeout(() => toast.success("Laporan siap diunduh", { id }), 900)
   }
 
-  function acknowledge(id: string) {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status: "normal" } : r)))
-    toast.success(`${id} ditindaklanjuti`)
+  // Ack hanya menandai sudah ditindaklanjuti; level EWS tetap mengikuti bacaan.
+  function acknowledge(code: string, level: StationLevel) {
+    setAcked((prev) => (prev.includes(code) ? prev : [...prev, code]))
+    toast.success(`${code} ditindaklanjuti`, {
+      description: `Status EWS tetap ${level === "offline" ? "Offline" : EWS_META[level].label} sampai bacaan membaik`,
+    })
   }
+
+  const inTargetTone: Tone = stats.inTargetPct >= 80 ? "normal" : stats.inTargetPct >= 40 ? "warning" : "critical"
 
   return (
     <PeatShell title="Borehole Monitoring" subtitle="Groundwater & Water Table Network">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="relative">
+        <RangeMenu value={dateRange} onSelect={setDateRange} />
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setRangeOpen((o) => !o)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12.5px] font-medium text-white/75 transition-colors hover:border-white/20"
-          >
-            {range}
-            <ChevronDownIcon className="size-3.5" />
-          </button>
-          {rangeOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setRangeOpen(false)} />
-              <div className="absolute z-50 mt-1 min-w-full overflow-hidden rounded-lg border border-white/10 bg-[#10201a] py-1 shadow-xl">
-                {RANGE_OPTIONS.map((o) => (
-                  <button
-                    key={o}
-                    onClick={() => {
-                      setRange(o)
-                      setRangeOpen(false)
-                      toast("Rentang: " + o)
-                    }}
-                    className="block w-full px-3 py-2 text-left text-[12.5px] text-white/75 hover:bg-white/5"
-                  >
-                    {o}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
+            type="button"
             onClick={refresh}
             className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12.5px] font-medium text-white/75 transition-colors hover:border-white/20"
           >
@@ -321,90 +333,197 @@ export default function BoreholeMonitoringPage() {
             Refresh
           </button>
           <button
+            type="button"
             onClick={exportReport}
             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-1.5 text-[12.5px] font-medium text-emerald-400 ring-1 ring-emerald-500/30 transition-colors hover:bg-emerald-500/25"
           >
             <DownloadIcon className="size-3.5" />
             Export
           </button>
+          <OpenInTwin layer="waterTable" block={division === ALL_BLOCKS ? undefined : division} />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Avg Water Table" value={stats.avgWaterTable} unit="cm" tone="warning" icon={WavesIcon} delta="3 cm" deltaDir="down" deltaTone="bad" />
-        <StatTile label="Boreholes Critical" value="3" tone="critical" icon={ActivityIcon} delta="1" deltaDir="up" deltaTone="bad" />
-        <StatTile label="Deepest" value={stats.deepest} unit="cm" tone="critical" icon={GaugeIcon} />
-        <StatTile label="Within Target" value={stats.withinTarget} unit="%" tone="warning" icon={TargetIcon} delta="5%" deltaDir="down" deltaTone="bad" />
-        <StatTile label="Active Boreholes" value={stats.activeBoreholes} tone="info" icon={RadioTowerIcon} delta="2" deltaDir="up" deltaTone="good" />
-        <StatTile label="Avg Battery" value={stats.avgBattery} unit="%" tone="normal" icon={BatteryMediumIcon} delta="1%" deltaDir="down" deltaTone="neutral" />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <StatTile
+          label="Avg Water Table"
+          value={fmtNum(stats.avgWt)}
+          unit="cm"
+          tone={stats.avgLevel}
+          icon={WavesIcon}
+          status={`${EWS_META[stats.avgLevel].label} · target ≥ −30 cm`}
+          spark={trend.history.map((p) => p.value)}
+          delta={
+            wtDelta !== 0
+              ? { text: `${Math.abs(wtDelta)} cm`, dir: wtDelta < 0 ? "down" : "up", good: wtDelta > 0, vs: "vs yesterday" }
+              : undefined
+          }
+          foot={wtDelta === 0 ? "Stable vs yesterday" : undefined}
+        />
+        <StatTile
+          label="Boreholes Siaga/Awas"
+          value={String(stats.alarm.length)}
+          unit="stations"
+          tone={stats.awas > 0 ? "awas" : stats.alarm.length > 0 ? "siaga" : "normal"}
+          icon={ActivityIcon}
+          status={stats.alarm.length ? stats.alarm.map((r) => r.code).join(" · ") : "None"}
+          spark={stats.alarmSpark}
+          foot={`${stats.awas} Awas · ${stats.alarm.length - stats.awas} Siaga · threshold −40 cm`}
+        />
+        <StatTile
+          label="Deepest"
+          value={stats.deepest ? fmtNum(stats.deepest.value) : "—"}
+          unit="cm"
+          tone={stats.deepest?.level ?? "offline"}
+          icon={GaugeIcon}
+          status={stats.deepest ? `${stats.deepest.code} · ${stats.deepest.block}` : undefined}
+          spark={stats.deepest?.trend}
+          foot="Awas below −60 cm"
+        />
+        <StatTile
+          label="Within Target"
+          value={String(stats.inTargetPct)}
+          unit="%"
+          tone={inTargetTone}
+          icon={TargetIcon}
+          foot={`${stats.inTarget} of ${liveRows.length} boreholes ≥ −30 cm`}
+        />
+        <StatTile
+          label="Active Boreholes"
+          value={`${liveRows.length}/${divisionRows.length}`}
+          tone="info"
+          icon={RadioTowerIcon}
+          status="Reporting in table"
+          foot={`Network ${NETWORK} online · LoRaWAN`}
+        />
+        <StatTile
+          label="Avg Battery"
+          value={String(stats.battery)}
+          unit="%"
+          tone={stats.battery >= 70 ? "normal" : "warning"}
+          icon={BatteryMediumIcon}
+          foot={stats.lowBattery ? `Lowest ${stats.lowBattery.code} · ${stats.lowBattery.battery}%` : undefined}
+        />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Panel className="h-full">
-          <div className="flex items-start justify-between px-4 pb-1 pt-3.5">
-            <div>
-              <h3 className="text-[14px] font-semibold text-white">Water Table Trend (7 Days)</h3>
-              <p className="text-[11px] text-white/40">All Borehole Average (cm below surface)</p>
-            </div>
-            <button
-              onClick={() => {
-                setShowTargets((s) => {
-                  const next = !s
-                  toast(next ? "Garis target ditampilkan" : "Garis target disembunyikan")
-                  return next
-                })
-              }}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] font-medium transition-colors",
-                showTargets
-                  ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
-                  : "border border-white/10 text-white/55 hover:border-white/20"
-              )}
-            >
-              <TargetIcon className="size-3.5" />
-              Target Lines
-            </button>
-          </div>
-          <div className="h-[200px] px-1 pb-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={waterTableTrend} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
-                <XAxis dataKey="day" {...axisProps} />
-                <YAxis domain={[-60, -10]} {...axisProps} width={34} />
-                {showTargets && (
-                  <>
-                    <ReferenceArea y1={-30} y2={-10} fill="#22c55e" fillOpacity={0.06} />
-                    <ReferenceArea y1={-40} y2={-30} fill="#f59e0b" fillOpacity={0.06} />
-                    <ReferenceArea y1={-60} y2={-40} fill="#ef4444" fillOpacity={0.07} />
-                    <ReferenceLine y={-30} stroke="#22c55e" strokeDasharray="4 3" strokeOpacity={0.6} label={{ value: "Target (-30 cm)", position: "insideTopLeft", fontSize: 9, fill: "#34d399" }} />
-                    <ReferenceLine y={-40} stroke="#f59e0b" strokeDasharray="4 3" strokeOpacity={0.6} label={{ value: "Warning (-40 cm)", position: "insideTopLeft", fontSize: 9, fill: "#fbbf24" }} />
-                    <ReferenceLine y={-60} stroke="#ef4444" strokeDasharray="4 3" strokeOpacity={0.6} label={{ value: "Critical (-60 cm)", position: "insideTopLeft", fontSize: 9, fill: "#f87171" }} />
-                  </>
+          <PanelHeader
+            kicker="EWS · MUKA AIR"
+            title={`Water Table Trend (${span})`}
+            subtitle={`${division === ALL_BLOCKS ? "All boreholes" : division} average (cm below surface) · twin forecast to ${trend.forecast[trend.forecast.length - 1]?.day ?? "—"}`}
+            action={
+              <button
+                type="button"
+                aria-pressed={showTargets}
+                onClick={() => setShowTargets((s) => !s)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                  showTargets
+                    ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
+                    : "border border-white/10 text-white/55 hover:border-white/20"
                 )}
-                <Tooltip {...tooltipStyle} />
-                <Line dataKey="value" name="Water Table" type="monotone" stroke="#38bdf8" strokeWidth={2.5} dot={{ r: 3, fill: "#38bdf8" }} activeDot={{ r: 4 }} />
+              >
+                <TargetIcon className="size-3.5" />
+                Target Lines
+              </button>
+            }
+          />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 pb-1">
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium"
+              style={{
+                color: chipColor,
+                borderColor: `color-mix(in srgb, ${chipColor} 40%, transparent)`,
+                background: `color-mix(in srgb, ${chipColor} 10%, transparent)`,
+              }}
+            >
+              <BoxIcon className="size-3.5" />
+              {chip.text}
+            </span>
+            <span className="flex items-center gap-3 text-[10.5px] text-white/55">
+              <span className="flex items-center gap-1.5">
+                <span className="h-0.5 w-3.5 rounded-full bg-sky-400" />
+                Observed
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-3.5 border-t-2 border-dashed border-sky-300/80" />
+                Twin forecast (Baseline)
+              </span>
+            </span>
+          </div>
+          <div className="h-[220px] px-1 pb-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartData} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+                <CartesianGrid {...gridProps} />
+                <XAxis dataKey="day" {...axisProps} />
+                <YAxis
+                  domain={[-70, 0]}
+                  ticks={Y_TICKS}
+                  tickFormatter={(v: number) => `${v} cm`}
+                  {...axisProps}
+                  width={50}
+                />
+                {showTargets && WT_BANDS.map((b) => <ReferenceArea key={b.level} {...bandProps(b)} />)}
+                {showTargets && <ReferenceLine {...lineProps(TARGET_LINE)} />}
+                {showTargets && WT_LINES.map((t) => <ReferenceLine key={t.y} {...lineProps(t)} />)}
+                <ReferenceLine
+                  x={HISTORY_DAYS[HISTORY_DAYS.length - 1]}
+                  stroke="rgba(255,255,255,0.3)"
+                  strokeDasharray="2 3"
+                  label={{ value: "Live", position: "insideTopRight", fontSize: 9, fill: "rgba(255,255,255,0.6)" }}
+                />
+                <Tooltip {...tooltipStyle} formatter={withUnit("cm")} />
+                <Line
+                  dataKey="value"
+                  name="Water Table"
+                  type="monotone"
+                  stroke="#38bdf8"
+                  strokeWidth={2.5}
+                  dot={{ r: 3, fill: "#38bdf8" }}
+                  activeDot={{ r: 4 }}
+                />
+                <Line
+                  dataKey="forecast"
+                  name="Twin forecast"
+                  type="monotone"
+                  stroke="#7dd3fc"
+                  strokeWidth={2}
+                  strokeDasharray="5 4"
+                  dot={{ r: 2.5, fill: "#04120b", stroke: "#7dd3fc" }}
+                  activeDot={{ r: 4 }}
+                />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
         </Panel>
 
         <Panel className="h-full">
-          <div className="px-4 pb-1 pt-3.5">
-            <h3 className="text-[14px] font-semibold text-white">Water Level by Borehole (cm)</h3>
-            <p className="text-[11px] text-white/40">Latest reading per station</p>
-          </div>
-          <div className="h-[200px] px-1 pb-2">
+          <PanelHeader
+            kicker="EWS · PER STASIUN"
+            title="Water Level by Borehole (cm)"
+            subtitle={`Latest reading per station · 10 Sep 09:37${division === ALL_BLOCKS ? "" : ` · ${division}`}`}
+          />
+          <div className="h-[220px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={levelByBorehole} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
-                <XAxis dataKey="id" {...axisProps} />
-                <YAxis domain={[-70, 0]} {...axisProps} width={34} />
-                <ReferenceLine y={-30} stroke="#22c55e" strokeDasharray="4 3" strokeOpacity={0.5} />
-                <ReferenceLine y={-40} stroke="#f59e0b" strokeDasharray="4 3" strokeOpacity={0.5} />
-                <Tooltip {...tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                <Bar dataKey="level" name="Water Level (cm)" radius={[0, 0, 3, 3]} barSize={26}>
-                  {levelByBorehole.map((b) => (
-                    <Cell key={b.id} fill={barColor[b.tone]} />
+              <BarChart data={liveRows} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+                <CartesianGrid {...gridProps} />
+                <XAxis dataKey="code" {...axisProps} interval={0} />
+                <YAxis
+                  domain={[-70, 0]}
+                  ticks={Y_TICKS}
+                  tickFormatter={(v: number) => `${v} cm`}
+                  {...axisProps}
+                  width={50}
+                />
+                <ReferenceLine {...lineProps(TARGET_LINE)} />
+                {WT_LINES.map((t) => (
+                  <ReferenceLine key={t.y} {...lineProps(t)} />
+                ))}
+                <Tooltip {...tooltipStyle} formatter={withUnit("cm")} />
+                <Bar dataKey="value" name="Water Level" radius={[0, 0, 3, 3]} maxBarSize={26}>
+                  {liveRows.map((r) => (
+                    <Cell key={r.code} fill={levelColor(r.level)} />
                   ))}
                 </Bar>
               </BarChart>
@@ -413,95 +532,110 @@ export default function BoreholeMonitoringPage() {
         </Panel>
       </div>
 
-      <div className="grid gap-4">
-        <Panel>
-          <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
-            <div>
-              <h3 className="text-[14px] font-semibold text-white">Borehole Status</h3>
-              <p className="text-[11px] text-white/40">Live network telemetry • {visibleRows.length} of 52 stations</p>
-            </div>
-            <ViewAll />
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2 pt-1">
-            {FILTERS.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => setFilter(f.key)}
-                className={cn(
-                  "rounded-lg px-2.5 py-1 text-[11.5px] font-medium transition-colors",
-                  filter === f.key
-                    ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
-                    : "text-white/45 hover:text-white/70"
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <table className="w-full text-left">
+      <Panel>
+        <PanelHeader
+          kicker="TELEMETRI · LORAWAN"
+          title="Borehole Status"
+          subtitle={`Live 10 Sep 09:37 · ${visibleRows.length} of ${divisionRows.length} stations${division === ALL_BLOCKS ? "" : ` in ${division}`} · network ${NETWORK}`}
+          action={<ViewAll href="/map-view" label="View on Map" />}
+        />
+        <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              aria-pressed={filter === f.key}
+              onClick={() => setFilter(f.key)}
+              className={cn(
+                "rounded-lg px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                filter === f.key
+                  ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
+                  : "text-white/55 hover:text-white/80"
+              )}
+            >
+              {f.label}
+              <span className="ml-1 font-mono text-[10px] text-white/50">{levelCounts[f.key] ?? 0}</span>
+            </button>
+          ))}
+        </div>
+        <TableScroll>
+          <table className="w-full min-w-[860px] text-left">
             <thead>
               <tr>
-                <th className={th}>ID</th>
-                <th className={th}>Location</th>
-                <th className={cn(th, "text-right")}>Water Level</th>
-                <th className={cn(th, "text-right")}>Battery</th>
-                <th className={th}>Signal</th>
-                <th className={th}>Status</th>
-                <th className={cn(th, "text-right")}>Trend (3D)</th>
-                <th className={cn(th, "text-right")}>Action</th>
+                <th className={tableTh}>ID</th>
+                <th className={tableTh}>Block</th>
+                <th className={cn(tableTh, "text-right")}>Water Level</th>
+                <th className={cn(tableTh, "text-right")}>Battery</th>
+                <th className={tableTh}>Signal</th>
+                <th className={tableTh}>Last Seen</th>
+                <th className={tableTh}>Status</th>
+                <th className={cn(tableTh, "text-right")}>Trend (7D)</th>
+                <th className={cn(tableTh, "text-right")}>Action</th>
               </tr>
             </thead>
             <tbody>
               {visibleRows.length === 0 && (
-                <tr className="border-t border-white/5">
-                  <td className={cn(td, "text-center text-white/40")} colSpan={8}>
-                    Tidak ada borehole di {division}
+                <tr className={tableRow}>
+                  <td className={cn(tableTd, "text-center text-white/50")} colSpan={9}>
+                    Tidak ada borehole dengan status ini{division === ALL_BLOCKS ? "" : ` di ${division}`}
                   </td>
                 </tr>
               )}
-              {visibleRows.map((r) => (
-                <tr
-                  key={r.id}
-                  onClick={() => toast(`${r.id} • ${scaleNumber(r.level, estate)} cm • ${statusLabel[r.status]}`)}
-                  className="cursor-pointer border-t border-white/5 hover:bg-white/[0.03]"
-                >
-                  <td className={cn(td, "font-medium text-white/85")}>{r.id}</td>
-                  <td className={cn(td, "text-white/55")}>{r.block}</td>
-                  <td className={cn(td, valueTone[r.status], "text-right font-medium")}>{scaleNumber(r.level, estate)} cm</td>
-                  <td className={cn(td, "text-right")}>
-                    <span className={cn("font-medium", r.battery < 60 ? "text-amber-400" : "text-white/70")}>{r.battery}%</span>
-                  </td>
-                  <td className={cn(td, "font-medium", signalTone[r.signal])}>{r.signal}</td>
-                  <td className={td}>
-                    <StatusPill tone={r.status} />
-                  </td>
-                  <td className={cn(td, "text-right")}>
-                    <span className="inline-flex justify-end">
-                      <Spark data={r.trend} color={sparkColor[r.status]} />
-                    </span>
-                  </td>
-                  <td className={cn(td, "text-right")}>
-                    {r.status === "warning" || r.status === "critical" ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          acknowledge(r.id)
-                        }}
-                        className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-400 ring-1 ring-emerald-500/30 transition-colors hover:bg-emerald-500/25"
-                      >
-                        <CheckIcon className="size-3" />
-                        Ack
-                      </button>
-                    ) : (
-                      <span className="text-[11px] text-white/30">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {visibleRows.map((r) => {
+                const isAcked = acked.includes(r.code)
+                const needsAck = r.level !== "normal" && r.level !== "offline"
+                return (
+                  <tr key={r.code} className={tableRow}>
+                    <td className={cn(tableTd, "font-mono font-medium text-white/85")}>{r.code}</td>
+                    <td className={cn(tableTd, "text-white/60")}>{r.block}</td>
+                    <td className={cn(tableTd, "text-right font-medium tabular-nums")} style={{ color: levelColor(r.level) }}>
+                      {r.value == null ? "OFFLINE" : `${fmtNum(r.value)} cm`}
+                    </td>
+                    <td className={cn(tableTd, "text-right tabular-nums")}>
+                      <span className={cn("font-medium", r.battery < 60 ? "text-amber-400" : "text-white/70")}>{r.battery}%</span>
+                    </td>
+                    <td className={tableTd}>
+                      <StatusDot tone={SIGNAL_TONE[r.signal]} label={r.signal} />
+                    </td>
+                    <td className={cn(tableTd, "font-mono text-white/60")}>{r.lastSeen}</td>
+                    <td className={tableTd}>
+                      <span className="inline-flex flex-wrap items-center gap-1.5">
+                        <EwsPill level={r.level} pulse={r.level === "awas"} />
+                        {isAcked && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.04] px-2 py-[2px] text-[10px] font-medium text-white/70">
+                            <CheckIcon className="size-3" />
+                            Acknowledged
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className={cn(tableTd, "text-right")}>
+                      <span className="inline-flex justify-end">
+                        <Spark data={r.trend} color={levelColor(r.level)} />
+                      </span>
+                    </td>
+                    <td className={cn(tableTd, "text-right")}>
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        {needsAck && !isAcked && (
+                          <button
+                            type="button"
+                            onClick={() => acknowledge(r.code, r.level)}
+                            className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-400 ring-1 ring-emerald-500/30 transition-colors hover:bg-emerald-500/25"
+                          >
+                            <CheckIcon className="size-3" />
+                            Ack
+                          </button>
+                        )}
+                        <OpenInTwin variant="icon" asset={r.code} layer="waterTable" />
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
-        </Panel>
-      </div>
+        </TableScroll>
+      </Panel>
     </PeatShell>
   )
 }

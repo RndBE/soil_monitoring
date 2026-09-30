@@ -2,8 +2,7 @@
 
 import {
   ActivityIcon,
-  ArrowDownIcon,
-  ArrowUpIcon,
+  BoxIcon,
   ChevronDownIcon,
   DownloadIcon,
   GaugeIcon,
@@ -29,133 +28,165 @@ import {
   YAxis,
 } from "recharts"
 
-import { Panel, PanelHeader, ViewAll } from "@/components/peatland/panel"
+import { axisProps, gridProps, tooltipStyle, withUnit } from "@/components/peatland/chart-theme"
+import { OpenInTwin } from "@/components/peatland/open-in-twin"
+import { Panel, PanelHeader, TableScroll, ViewAll, tableRow, tableTd, tableTh } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { StatTile } from "@/components/peatland/stat-tile"
+import { EwsPill, type Tone } from "@/components/peatland/status"
+import {
+  BLOCK_COLOR,
+  EWS_META,
+  SCENARIO_PRESETS,
+  TWIN_BLOCKS,
+  WT_COMPLIANCE,
+  WT_CRITICAL,
+  WT_TARGET,
+  buildHistoryFrames,
+  ewsFromWaterTable,
+  getBlockBaseline,
+  simulateScenario,
+  subsidenceRate,
+  summarizeFrame,
+  type EwsLevel,
+} from "@/lib/peatland/digital-twin"
+import { useDashboardFilters } from "@/lib/peatland/filters"
+import { ALL_BLOCKS, matchesBlock, scaleNumber } from "@/lib/peatland/filter-logic"
+import { stationByCode } from "@/lib/peatland/stations"
 import { cn } from "@/lib/utils"
 
-const axisProps = {
-  tick: { fontSize: 10, fill: "rgba(255,255,255,0.4)" },
-  axisLine: { stroke: "rgba(255,255,255,0.12)" },
-  tickLine: false as const,
+const round1 = (v: number) => Math.round(v * 10) / 10
+const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0)
+/** Angka dengan minus tipografis, mis. "−62". */
+const fmtNum = (v: number) => `${v < 0 ? "−" : ""}${Math.abs(round1(v))}`
+
+// Laju subsidence setara ambang muka air (model twin: cm/tahun = −muka air / 10).
+const RATE_TARGET = subsidenceRate(WT_TARGET) // 3 cm/thn ↔ −30 cm
+const RATE_PP57 = subsidenceRate(WT_COMPLIANCE) // 4 cm/thn ↔ −40 cm (PP 57/2016)
+const RATE_AWAS = subsidenceRate(WT_CRITICAL) // 6 cm/thn ↔ −60 cm
+
+/** Level EWS laju subsidence, selaras dengan ambang muka air. */
+function rateLevel(rate: number): EwsLevel {
+  if (rate <= RATE_TARGET) return "normal"
+  if (rate < RATE_PP57) return "waspada"
+  if (rate < RATE_AWAS) return "siaga"
+  return "awas"
 }
 
-const tooltipStyle = {
-  contentStyle: {
-    background: "#10201a",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: 8,
-    fontSize: 12,
-  },
-  labelStyle: { color: "rgba(255,255,255,0.6)" },
+const YEARS = ["2019", "2020", "2021", "2022", "2023", "2024"]
+// Selisih muka air rata-rata tahunan (cm) terhadap muka air live twin, 2020–2024 (2024 = live).
+const ANNUAL_WT_OFFSET: Record<string, number[]> = {
+  "Block A": [2, 4, -1, 3, 0],
+  "Block B": [3, 0, -2, 2, 0],
+  "Block C": [10, 7, 4, 3, 0],
+  "Block D": [6, 4, 1, 3, 0],
+  "Block E": [1, 3, -2, 2, 0],
 }
 
-type Tone = "normal" | "warning" | "critical" | "info"
-
-const valueTone: Record<Tone, string> = {
-  normal: "text-emerald-400",
-  warning: "text-amber-400",
-  critical: "text-red-400",
-  info: "text-sky-400",
+type BlockSeries = {
+  block: string
+  waterTable: number
+  /** Laju tahunan 2020–2024 (cm/tahun). */
+  rates: number[]
+  /** Kumulatif 2019–2024 (cm), 2019 = 0. */
+  cumulative: number[]
+  rate: number
 }
 
-const iconTone: Record<Tone, string> = {
-  normal: "bg-emerald-500/12 text-emerald-400 ring-emerald-500/20",
-  warning: "bg-amber-500/12 text-amber-400 ring-amber-500/20",
-  critical: "bg-red-500/12 text-red-400 ring-red-500/20",
-  info: "bg-sky-500/12 text-sky-400 ring-sky-500/20",
+// Laju tiap tahun dari muka air rata-rata tahunan lewat model twin; kumulatif = jumlah berjalan.
+function buildBlockSeries(estate: string): BlockSeries[] {
+  const baseline = getBlockBaseline(estate)
+  return TWIN_BLOCKS.map((block) => {
+    const waterTable = baseline.find((b) => b.block === block)?.waterTable ?? WT_TARGET
+    const rates = (ANNUAL_WT_OFFSET[block] ?? [0, 0, 0, 0, 0]).map((o) => subsidenceRate(waterTable + o))
+    const cumulative = [0]
+    for (const r of rates) cumulative.push(round1(cumulative[cumulative.length - 1] + r))
+    return { block, waterTable, rates, cumulative, rate: rates[rates.length - 1] }
+  })
 }
 
-const statusStyle: Record<Tone, { text: string; dot: string; label: string }> = {
-  normal: { text: "text-emerald-400", dot: "bg-emerald-500", label: "Normal" },
-  warning: { text: "text-amber-400", dot: "bg-amber-500", label: "Warning" },
-  critical: { text: "text-red-400", dot: "bg-red-500", label: "Critical" },
-  info: { text: "text-sky-400", dot: "bg-sky-500", label: "Info" },
+// Tiang pantau subsidence; muka air diambil dari borehole acuan terdekat di registri stasiun.
+const POLES = [
+  { pole: "SUB-01", block: "Block A", ref: "BH-03", dev: 0.1 },
+  { pole: "SUB-02", block: "Block A", ref: "BH-02", dev: -0.1 },
+  { pole: "SUB-03", block: "Block B", ref: "BH-01", dev: 0.1 },
+  { pole: "SUB-04", block: "Block B", ref: "BH-04", dev: 0.1 },
+  { pole: "SUB-05", block: "Block C", ref: "BH-07", dev: 0.2 },
+  { pole: "SUB-06", block: "Block C", ref: "BH-11", dev: -0.1 },
+  { pole: "SUB-07", block: "Block D", ref: "BH-12", dev: 0.1 },
+  { pole: "SUB-08", block: "Block D", ref: "BH-12", dev: -0.2 },
+  { pole: "SUB-09", block: "Block E", ref: "BH-15", dev: -0.1 },
+  { pole: "SUB-10", block: "Block E", ref: "BH-09", dev: -0.1 },
+]
+
+type PoleRow = { pole: string; block: string; ref: string; waterTable: number; rate: number; cumulative: number; level: EwsLevel }
+
+function buildPoles(estate: string, series: BlockSeries[]): PoleRow[] {
+  return POLES.map((p) => {
+    const waterTable = scaleNumber(stationByCode(p.ref)?.value ?? WT_TARGET, estate)
+    // Hasil survei = laju model + simpangan kecil per tiang.
+    const rate = round1(Math.max(0, subsidenceRate(waterTable) + p.dev))
+    const s = series.find((b) => b.block === p.block)
+    const cum = s ? s.cumulative[s.cumulative.length - 1] : 0
+    const cumulative = s && s.rate > 0 ? round1((cum * rate) / s.rate) : cum
+    return { pole: p.pole, block: p.block, ref: p.ref, waterTable, rate, cumulative, level: rateLevel(rate) }
+  })
 }
 
-function StatTile({
-  label,
-  value,
-  unit,
-  tone,
-  icon: Icon,
-  delta,
-  deltaDir,
-  deltaTone,
-}: {
-  label: string
-  value: string
-  unit?: string
-  tone: Tone
-  icon: typeof GaugeIcon
-  delta?: string
-  deltaDir?: "up" | "down"
-  deltaTone?: "good" | "bad" | "muted"
-}) {
-  const DeltaIcon = deltaDir === "up" ? ArrowUpIcon : ArrowDownIcon
-  const deltaColor =
-    deltaTone === "good" ? "text-emerald-400" : deltaTone === "bad" ? "text-red-400" : "text-white/50"
-  return (
-    <div className="flex flex-col gap-3 rounded-xl border border-white/8 bg-gradient-to-b from-white/[0.04] to-transparent p-4 ring-1 ring-white/5 transition-colors hover:border-white/15">
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45">{label}</span>
-        <span className={cn("inline-flex size-8 items-center justify-center rounded-lg ring-1", iconTone[tone])}>
-          <Icon className="size-4" />
-        </span>
-      </div>
-      <div className="flex items-baseline gap-1.5">
-        <span className={cn("text-[28px] font-bold leading-none tracking-tight", valueTone[tone])}>{value}</span>
-        {unit && <span className="text-[13px] font-medium text-white/40">{unit}</span>}
-      </div>
-      {delta ? (
-        <div className="flex items-center gap-1 border-t border-white/5 pt-2 text-[11px]">
-          <span className="text-white/40">vs yesterday</span>
-          <DeltaIcon className={cn("size-3", deltaColor)} />
-          <span className={cn("font-semibold", deltaColor)}>{delta}</span>
-        </div>
-      ) : null}
-    </div>
-  )
-}
+const PROJECTION_DAYS = 14
+const presetOf = (key: string) => (SCENARIO_PRESETS.find((p) => p.key === key) ?? SCENARIO_PRESETS[0]).scenario
 
-function StatusPill({ tone }: { tone: Tone }) {
-  const s = statusStyle[tone]
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] font-medium", s.text)}>
-      <span className={cn("size-1.5 rounded-full", s.dot)} />
-      {s.label}
-    </span>
-  )
+// Proyeksi twin 14 hari: muka air rata-rata (tertimbang luas) → laju subsidence, Baseline vs Rewetting.
+function buildProjection(estate: string, blocks: string[]) {
+  const baseline = getBlockBaseline(estate)
+  const frames = buildHistoryFrames(baseline)
+  const live = frames[frames.length - 1]
+  const base = simulateScenario(baseline, { ...presetOf("baseline"), days: PROJECTION_DAYS })
+  const rewet = simulateScenario(baseline, { ...presetOf("rewet"), days: PROJECTION_DAYS })
+  const wt = (f: typeof live) => summarizeFrame(f, baseline, blocks).waterTable
+  const liveWt = wt(live)
+  const data = [
+    { day: live.label, baseline: subsidenceRate(liveWt), rewet: subsidenceRate(liveWt) },
+    ...base.map((f, i) => ({ day: f.label, baseline: subsidenceRate(wt(f)), rewet: subsidenceRate(wt(rewet[i])) })),
+  ]
+  const baseEndWt = wt(base[base.length - 1])
+  const rewetEndWt = wt(rewet[rewet.length - 1])
+  return {
+    data,
+    endDay: base[base.length - 1].label,
+    baseEndWt,
+    rewetEndWt,
+    baseEnd: subsidenceRate(baseEndWt),
+    rewetEnd: subsidenceRate(rewetEndWt),
+  }
 }
-
-type LegendItem = { key: keyof typeof seriesMeta; label: string; color: string }
 
 function LegendToggle({
   items,
-  active,
+  hidden,
   onToggle,
 }: {
-  items: LegendItem[]
-  active: Record<string, boolean>
-  onToggle: (key: string) => void
+  items: string[]
+  hidden: string[]
+  onToggle: (block: string) => void
 }) {
   return (
-    <div className="flex items-center gap-4 px-4 pb-1">
-      {items.map((i) => {
-        const on = active[i.key]
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 pb-1">
+      {items.map((block) => {
+        const on = !hidden.includes(block)
         return (
           <button
-            key={i.label}
-            onClick={() => onToggle(i.key)}
+            key={block}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onToggle(block)}
             className={cn(
               "flex items-center gap-1.5 text-[10.5px] transition-colors",
-              on ? "text-white/55 hover:text-white/80" : "text-white/25 hover:text-white/45"
+              on ? "text-white/70 hover:text-white/90" : "text-white/50 line-through hover:text-white/70"
             )}
           >
-            <span
-              className="h-0.5 w-3.5 rounded-full"
-              style={{ background: i.color, opacity: on ? 1 : 0.3 }}
-            />
-            {i.label}
+            <span className="h-0.5 w-3.5 rounded-full" style={{ background: BLOCK_COLOR[block], opacity: on ? 1 : 0.3 }} />
+            {block}
           </button>
         )
       })}
@@ -163,87 +194,117 @@ function LegendToggle({
   )
 }
 
-const cumulativeSubsidence = [
-  { year: "2019", blockA: 0, blockC: 0, blockE: 0 },
-  { year: "2020", blockA: 3.2, blockC: 5.8, blockE: 4.1 },
-  { year: "2021", blockA: 6.0, blockC: 11.4, blockE: 8.0 },
-  { year: "2022", blockA: 9.1, blockC: 16.9, blockE: 11.7 },
-  { year: "2023", blockA: 11.8, blockC: 21.7, blockE: 15.0 },
-  { year: "2024", blockA: 14.2, blockC: 26.3, blockE: 18.4 },
-]
-
-const seriesMeta = {
-  blockA: { label: "Block A", color: "#38bdf8" },
-  blockC: { label: "Block C", color: "#ef4444" },
-  blockE: { label: "Block E", color: "#f59e0b" },
-} as const
-
-const rateByBlock = [
-  { block: "Block A", rate: 2.8, tone: "normal" as Tone },
-  { block: "Block B", rate: 3.6, tone: "normal" as Tone },
-  { block: "Block C", rate: 6.1, tone: "critical" as Tone },
-  { block: "Block D", rate: 4.4, tone: "normal" as Tone },
-  { block: "Block E", rate: 5.2, tone: "warning" as Tone },
-  { block: "Block F", rate: 3.1, tone: "normal" as Tone },
-]
-
-const barColor: Record<Tone, string> = {
-  normal: "#22c55e",
-  warning: "#f59e0b",
-  critical: "#ef4444",
-  info: "#38bdf8",
-}
-
-function poleTone(rate: number): Tone {
-  if (rate >= 6) return "critical"
-  if (rate >= 5) return "warning"
-  return "normal"
-}
-
-const poles = [
-  { pole: "SUB-01", block: "Block A", rate: 2.6, cumulative: 13.1, waterTable: -28 },
-  { pole: "SUB-02", block: "Block A", rate: 3.0, cumulative: 15.2, waterTable: -31 },
-  { pole: "SUB-03", block: "Block B", rate: 3.6, cumulative: 17.8, waterTable: -34 },
-  { pole: "SUB-04", block: "Block D", rate: 4.4, cumulative: 19.6, waterTable: -39 },
-  { pole: "SUB-05", block: "Block E", rate: 5.0, cumulative: 21.3, waterTable: -44 },
-  { pole: "SUB-06", block: "Block E", rate: 5.4, cumulative: 22.9, waterTable: -47 },
-  { pole: "SUB-07", block: "Block C", rate: 6.1, cumulative: 26.3, waterTable: -58 },
-  { pole: "SUB-08", block: "Block C", rate: 5.8, cumulative: 24.7, waterTable: -55 },
-]
-
-const statusFilters = ["Semua", "Normal", "Warning", "Critical"] as const
-type StatusFilter = (typeof statusFilters)[number]
-
 const exportFormats = ["PDF", "Excel", "CSV"] as const
 type ExportFormat = (typeof exportFormats)[number]
 
-const th = "px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-white/35"
-const td = "px-3 py-2 text-[12px]"
+/** Satu tombol Export dengan pilihan format. */
+function ExportMenu({ onExport }: { onExport: (format: ExportFormat) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-1.5 text-[11.5px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/25"
+      >
+        <DownloadIcon className="size-3.5" />
+        Export
+        <ChevronDownIcon className="size-3.5" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            role="menu"
+            className="absolute right-0 z-50 mt-1 min-w-full overflow-hidden rounded-lg border border-white/10 bg-[#10201a] py-1 shadow-xl"
+          >
+            {exportFormats.map((o) => (
+              <button
+                key={o}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  onExport(o)
+                }}
+                className="block w-full whitespace-nowrap px-3 py-2 text-left text-[12.5px] text-white/75 hover:bg-white/5"
+              >
+                {o}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+type StatusFilter = "all" | EwsLevel
+
+const FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "normal", label: "Normal" },
+  { key: "waspada", label: "Waspada" },
+  { key: "siaga", label: "Siaga" },
+  { key: "awas", label: "Awas" },
+]
 
 export default function PeatSubsidencePage() {
-  const [series, setSeries] = useState<Record<string, boolean>>({
-    blockA: true,
-    blockC: true,
-    blockE: true,
-  })
+  const { estate, division } = useDashboardFilters()
+  const [hidden, setHidden] = useState<string[]>([])
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
 
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("Semua")
+  const series = useMemo(() => buildBlockSeries(estate), [estate])
+  const poles = useMemo(() => buildPoles(estate, series), [estate, series])
+  const visibleBlocks = useMemo(() => TWIN_BLOCKS.filter((b) => matchesBlock(b, division)), [division])
+  const visibleSeries = useMemo(() => series.filter((s) => visibleBlocks.includes(s.block)), [series, visibleBlocks])
+  const divisionPoles = useMemo(() => poles.filter((p) => matchesBlock(p.block, division)), [poles, division])
+  const filteredPoles = useMemo(
+    () => divisionPoles.filter((p) => statusFilter === "all" || p.level === statusFilter),
+    [divisionPoles, statusFilter]
+  )
+  const projection = useMemo(() => buildProjection(estate, visibleBlocks), [estate, visibleBlocks])
 
-  const [exportOpen, setExportOpen] = useState(false)
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("PDF")
+  const cumulativeData = useMemo(
+    () =>
+      YEARS.map((year, i) => ({
+        year,
+        ...Object.fromEntries(visibleSeries.map((s) => [s.block, s.cumulative[i]])),
+      })),
+    [visibleSeries]
+  )
 
-  const filteredPoles = useMemo(() => {
-    if (statusFilter === "Semua") return poles
-    return poles.filter((p) => statusStyle[poleTone(p.rate)].label === statusFilter)
-  }, [statusFilter])
+  // KPI dihitung dari data grafik & tabel yang sama.
+  const kpi = useMemo(() => {
+    const rateNow = round1(avg(visibleSeries.map((s) => s.rate)))
+    const ratePrev = round1(avg(visibleSeries.map((s) => s.rates[s.rates.length - 2])))
+    const cumSpark = YEARS.map((_, i) => round1(avg(visibleSeries.map((s) => s.cumulative[i]))))
+    const worst = [...visibleSeries].sort((a, b) => b.rate - a.rate)[0]
+    const maxPole = divisionPoles.reduce<PoleRow | null>((a, b) => (!a || b.rate > a.rate ? b : a), null)
+    const safe = divisionPoles.filter((p) => p.rate < RATE_PP57).length
+    return {
+      rateNow,
+      rateDelta: round1(rateNow - ratePrev),
+      rateSpark: [0, 1, 2, 3, 4].map((i) => round1(avg(visibleSeries.map((s) => s.rates[i])))),
+      cumulative: cumSpark[cumSpark.length - 1],
+      cumSpark,
+      worst,
+      maxPole,
+      safe,
+      safePct: divisionPoles.length ? Math.round((safe / divisionPoles.length) * 100) : 0,
+    }
+  }, [visibleSeries, divisionPoles])
 
-  function toggleSeries(key: string) {
-    setSeries((prev) => {
-      const next = { ...prev, [key]: !prev[key] }
-      const meta = seriesMeta[key as keyof typeof seriesMeta]
-      toast(next[key] ? `${meta.label} ditampilkan` : `${meta.label} disembunyikan`)
-      return next
-    })
+  const levelCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: divisionPoles.length }
+    for (const p of divisionPoles) counts[p.level] = (counts[p.level] ?? 0) + 1
+    return counts
+  }, [divisionPoles])
+
+  function toggleSeries(block: string) {
+    setHidden((prev) => (prev.includes(block) ? prev.filter((b) => b !== block) : [...prev, block]))
   }
 
   function regenerateInsight() {
@@ -251,89 +312,103 @@ export default function PeatSubsidencePage() {
     setTimeout(() => toast.success("Penilaian diperbarui", { id }), 900)
   }
 
-  function exportReport() {
-    const id = toast.loading("Membuat laporan…")
-    setTimeout(() => toast.success(`Laporan ${exportFormat} siap diunduh`, { id }), 900)
+  function exportReport(format: ExportFormat) {
+    const id = toast.loading(`Membuat laporan ${format}…`)
+    setTimeout(() => toast.success(`Laporan ${format} siap diunduh`, { id }), 900)
   }
+
+  const rateTone = rateLevel(kpi.rateNow)
+  const safeTone: Tone = kpi.safePct >= 80 ? "normal" : kpi.safePct >= 50 ? "warning" : "critical"
+  const cumMax = Math.max(30, Math.ceil(Math.max(0, ...visibleSeries.map((s) => s.cumulative[s.cumulative.length - 1])) / 5) * 5)
+  const overLimit = divisionPoles.filter((p) => p.rate >= RATE_PP57).length
+  const avoided = round1(projection.baseEnd - projection.rewetEnd)
+  const twinBlock = division === ALL_BLOCKS ? undefined : division
 
   return (
     <PeatShell title="Peat Subsidence" subtitle="Peat Surface Subsidence Monitoring">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <StatTile
           label="Avg Subsidence Rate"
-          value="4.2"
+          value={kpi.rateNow.toFixed(1)}
           unit="cm/yr"
-          tone="warning"
+          tone={rateTone}
           icon={TrendingDownIcon}
-          delta="+0.3 cm/yr"
-          deltaDir="up"
-          deltaTone="bad"
+          status={`${EWS_META[rateTone].label} · PP 57 setara ${RATE_PP57} cm/yr`}
+          spark={kpi.rateSpark}
+          delta={
+            kpi.rateDelta !== 0
+              ? { text: `${Math.abs(kpi.rateDelta).toFixed(1)} cm/yr`, dir: kpi.rateDelta > 0 ? "up" : "down", good: kpi.rateDelta < 0, vs: "vs 2023" }
+              : undefined
+          }
+          foot={kpi.rateDelta === 0 ? "Same as 2023" : undefined}
         />
         <StatTile
           label="Cumulative (since 2019)"
-          value="22"
+          value={kpi.cumulative.toFixed(1)}
           unit="cm"
           tone="warning"
           icon={LayersIcon}
-          delta="+0.4 cm"
-          deltaDir="up"
-          deltaTone="bad"
+          status={kpi.worst ? `Max ${kpi.worst.block} · ${kpi.worst.cumulative[kpi.worst.cumulative.length - 1]} cm` : undefined}
+          spark={kpi.cumSpark}
+          delta={{ text: `${kpi.rateNow.toFixed(1)} cm`, dir: "up", good: false, vs: "vs 2023" }}
         />
-        <StatTile label="Max Rate Station" value="SUB-07" unit="6.1 cm/yr" tone="critical" icon={GaugeIcon} />
+        <StatTile
+          label="Max Rate Station"
+          value={kpi.maxPole?.pole ?? "—"}
+          unit={kpi.maxPole ? `${kpi.maxPole.rate.toFixed(1)} cm/yr` : undefined}
+          tone={kpi.maxPole?.level ?? "offline"}
+          icon={GaugeIcon}
+          status={kpi.maxPole ? `${kpi.maxPole.block} · ${kpi.maxPole.ref} ${fmtNum(kpi.maxPole.waterTable)} cm` : undefined}
+          foot={`Awas ≥ ${RATE_AWAS} cm/yr (−60 cm)`}
+        />
         <StatTile
           label="Monitoring Poles"
-          value="36"
+          value={String(divisionPoles.length)}
           unit="active"
           tone="info"
           icon={RadioTowerIcon}
-          delta="0 offline"
-          deltaDir="down"
-          deltaTone="good"
+          foot="0 offline · survey 1 Sep 2024"
         />
         <StatTile
           label="Within Safe Limit"
-          value="78"
+          value={String(kpi.safePct)}
           unit="%"
-          tone="normal"
+          tone={safeTone}
           icon={ShieldCheckIcon}
-          delta="+2 pts"
-          deltaDir="up"
-          deltaTone="good"
+          foot={`${kpi.safe} of ${divisionPoles.length} poles < ${RATE_PP57} cm/yr`}
         />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Panel>
           <PanelHeader
+            kicker="SURVEI · KUMULATIF"
             title="Cumulative Subsidence (cm)"
-            subtitle="By block, 2019 - 2024"
-            action={<ViewAll onClick={() => toast.info("Membuka riwayat subsidensi…")} />}
+            subtitle={`${division === ALL_BLOCKS ? "By block" : division}, 2019 – 2024 · cm below 2019 surface`}
+            action={<ViewAll href="/reports" />}
           />
-          <LegendToggle
-            items={[
-              { key: "blockA", label: "Block A", color: "#38bdf8" },
-              { key: "blockC", label: "Block C", color: "#ef4444" },
-              { key: "blockE", label: "Block E", color: "#f59e0b" },
-            ]}
-            active={series}
-            onToggle={toggleSeries}
-          />
+          <LegendToggle items={visibleSeries.map((s) => s.block)} hidden={hidden} onToggle={toggleSeries} />
           <div className="h-[220px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={cumulativeSubsidence} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
+              <LineChart data={cumulativeData} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+                <CartesianGrid {...gridProps} />
                 <XAxis dataKey="year" {...axisProps} />
-                <YAxis domain={[0, 30]} {...axisProps} width={30} />
-                <Tooltip {...tooltipStyle} />
-                {series.blockC && (
-                  <Line dataKey="blockC" name="Block C" type="monotone" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 3, fill: "#ef4444" }} activeDot={{ r: 4 }} />
-                )}
-                {series.blockE && (
-                  <Line dataKey="blockE" name="Block E" type="monotone" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3, fill: "#f59e0b" }} activeDot={{ r: 4 }} />
-                )}
-                {series.blockA && (
-                  <Line dataKey="blockA" name="Block A" type="monotone" stroke="#38bdf8" strokeWidth={2.5} dot={{ r: 3, fill: "#38bdf8" }} activeDot={{ r: 4 }} />
-                )}
+                <YAxis domain={[0, cumMax]} tickFormatter={(v: number) => `${v} cm`} {...axisProps} width={44} />
+                <Tooltip {...tooltipStyle} formatter={withUnit("cm")} />
+                {visibleSeries
+                  .filter((s) => !hidden.includes(s.block))
+                  .map((s) => (
+                    <Line
+                      key={s.block}
+                      dataKey={s.block}
+                      name={s.block}
+                      type="monotone"
+                      stroke={BLOCK_COLOR[s.block]}
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: BLOCK_COLOR[s.block] }}
+                      activeDot={{ r: 4 }}
+                    />
+                  ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -341,27 +416,39 @@ export default function PeatSubsidencePage() {
 
         <Panel>
           <PanelHeader
+            kicker="EWS · LAJU"
             title="Subsidence Rate by Block (cm/yr)"
-            subtitle="Annual rate vs safe limit"
-            action={<ViewAll onClick={() => toast.info("Membuka detail laju per blok…")} />}
+            subtitle="2024 rate vs PP 57/2016 equivalent (−40 cm ↔ 4 cm/yr)"
+            action={<ViewAll href="/borehole-monitoring" label="Water Table" />}
           />
-          <div className="h-[220px] px-1 pb-2 pt-2">
+          <div className="h-[220px] px-1 pb-2">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={rateByBlock} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
+              <BarChart data={series} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+                <CartesianGrid {...gridProps} />
                 <XAxis dataKey="block" {...axisProps} />
-                <YAxis domain={[0, 8]} {...axisProps} width={28} />
-                <Tooltip {...tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                <YAxis domain={[0, 8]} tickFormatter={(v: number) => `${v}`} {...axisProps} width={28} />
+                <Tooltip {...tooltipStyle} formatter={withUnit("cm/yr")} />
                 <ReferenceLine
-                  y={5}
-                  stroke="#f59e0b"
+                  y={RATE_PP57}
+                  stroke={EWS_META.siaga.color}
                   strokeDasharray="4 3"
                   strokeOpacity={0.7}
-                  label={{ value: "Safe Limit", position: "insideTopRight", fontSize: 9, fill: "#fbbf24" }}
+                  label={{ value: `PP 57 setara · ${RATE_PP57} cm/yr (−40 cm)`, position: "insideTopLeft", fontSize: 9, fill: EWS_META.siaga.color }}
                 />
-                <Bar dataKey="rate" name="Rate (cm/yr)" radius={[3, 3, 0, 0]} barSize={26}>
-                  {rateByBlock.map((d) => (
-                    <Cell key={d.block} fill={barColor[d.tone]} />
+                <ReferenceLine
+                  y={RATE_AWAS}
+                  stroke={EWS_META.awas.color}
+                  strokeDasharray="4 3"
+                  strokeOpacity={0.7}
+                  label={{ value: `Awas · ${RATE_AWAS} cm/yr (−60 cm)`, position: "insideTopLeft", fontSize: 9, fill: EWS_META.awas.color }}
+                />
+                <Bar dataKey="rate" name="Rate" radius={[3, 3, 0, 0]} maxBarSize={30}>
+                  {series.map((s) => (
+                    <Cell
+                      key={s.block}
+                      fill={EWS_META[rateLevel(s.rate)].color}
+                      fillOpacity={matchesBlock(s.block, division) ? 0.9 : 0.25}
+                    />
                   ))}
                 </Bar>
               </BarChart>
@@ -370,153 +457,179 @@ export default function PeatSubsidencePage() {
         </Panel>
       </div>
 
-      <Panel>
-        <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3.5">
-          <div>
-            <h3 className="text-[14px] font-semibold text-white">Insight</h3>
-            <p className="text-[11px] text-white/40">Auto-generated assessment</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <button
-                onClick={() => setExportOpen((o) => !o)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11.5px] font-medium text-white/70 transition-colors hover:bg-white/5"
-              >
-                <DownloadIcon className="size-3.5" />
-                {exportFormat}
-                <ChevronDownIcon className="size-3.5" />
-              </button>
-              {exportOpen && (
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel>
+          <PanelHeader
+            kicker="ANALISIS · OTOMATIS"
+            title="Insight"
+            subtitle="Auto-generated assessment · live 10 Sep 2024"
+            action={
+              <>
+                <ExportMenu onExport={exportReport} />
+                <button
+                  type="button"
+                  onClick={regenerateInsight}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11.5px] font-medium text-white/70 transition-colors hover:bg-white/5"
+                >
+                  <RefreshCwIcon className="size-3.5" />
+                  Regenerate
+                </button>
+              </>
+            }
+          />
+          <div className="flex items-start gap-3 px-4 pb-4 pt-1">
+            <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/12 text-amber-400 ring-1 ring-amber-500/20">
+              <ActivityIcon className="size-4" />
+            </span>
+            <p className="text-[12.5px] leading-relaxed text-white/70">
+              Subsidence tracks water-table depth (twin model ≈ 1 cm/yr per 10 cm of drainage) &mdash; poles whose water table
+              is below <span className="font-medium text-amber-300">−40 cm</span> (PP 57/2016) exceed the{" "}
+              <span className="font-medium text-white/85">{RATE_PP57} cm/yr</span> equivalent limit ({overLimit} of{" "}
+              {divisionPoles.length} poles).{" "}
+              {kpi.worst && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setExportOpen(false)} />
-                  <div className="absolute right-0 z-50 mt-1 min-w-full overflow-hidden rounded-lg border border-white/10 bg-[#10201a] py-1 shadow-xl">
-                    {exportFormats.map((o) => (
-                      <button
-                        key={o}
-                        onClick={() => {
-                          setExportFormat(o)
-                          setExportOpen(false)
-                          toast("Format: " + o)
-                        }}
-                        className="block w-full px-3 py-2 text-left text-[12.5px] text-white/75 hover:bg-white/5"
-                      >
-                        {o}
-                      </button>
-                    ))}
-                  </div>
+                  <span className="font-medium text-red-300">{kpi.worst.block}</span> shows the steepest cumulative loss (
+                  {kpi.worst.cumulative[kpi.worst.cumulative.length - 1]} cm since 2019) and a water table of{" "}
+                  {fmtNum(kpi.worst.waterTable)} cm.{" "}
                 </>
               )}
-            </div>
-            <button
-              onClick={exportReport}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-1.5 text-[11.5px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/25"
-            >
-              <DownloadIcon className="size-3.5" />
-              Export
-            </button>
-            <button
-              onClick={regenerateInsight}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11.5px] font-medium text-white/70 transition-colors hover:bg-white/5"
-            >
-              <RefreshCwIcon className="size-3.5" />
-              Regenerate
-            </button>
-          </div>
-        </div>
-        <div className="flex items-start gap-3 px-4 pb-4 pt-1">
-          <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/12 text-amber-400 ring-1 ring-amber-500/20">
-            <ActivityIcon className="size-4" />
-          </span>
-          <p className="text-[12.5px] leading-relaxed text-white/70">
-            Subsidence rates correlate strongly with deeper water tables &mdash; poles reading below{" "}
-            <span className="font-medium text-amber-300">-45 cm</span> consistently exceed the{" "}
-            <span className="font-medium text-white/85">5 cm/yr</span> safe limit.{" "}
-            <span className="font-medium text-red-300">Block C</span> shows the steepest cumulative loss (26 cm since 2019)
-            and the deepest water tables (-55 to -58 cm). Recommended action: raise the managed water level in Block C toward
-            the <span className="font-medium text-emerald-300">-30 cm</span> target by adjusting weir gates and rewetting
-            priority canals.
-          </p>
-        </div>
-      </Panel>
-
-      <Panel>
-        <div className="flex items-center justify-between gap-3 px-4 pb-1 pt-3.5">
-          <div>
-            <h3 className="text-[14px] font-semibold text-white">Subsidence Poles</h3>
-            <p className="text-[11px] text-white/40">
-              Latest survey readings &middot; {filteredPoles.length} of 36 poles
+              Twin projection: rewetting holds the rate at{" "}
+              <span className="font-medium text-sky-300">{projection.rewetEnd.toFixed(1)} cm/yr</span> by {projection.endDay} vs{" "}
+              <span className="font-medium text-amber-300">{projection.baseEnd.toFixed(1)} cm/yr</span> under baseline.
+              Recommended action: raise the managed water level{kpi.worst ? ` in ${kpi.worst.block}` : ""} toward the{" "}
+              <span className="font-medium text-emerald-300">−30 cm</span> target by adjusting weir gates and rewetting
+              priority canals.
             </p>
           </div>
-          <ViewAll onClick={() => toast.info("Membuka semua 36 tiang pantau…")} />
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2 pt-1">
-          {statusFilters.map((f) => {
-            const on = statusFilter === f
+        </Panel>
+
+        <Panel>
+          <PanelHeader
+            kicker="DIGITAL TWIN · PRAKIRAAN 14 HARI"
+            icon={BoxIcon}
+            title="Subsidence Projection · Baseline vs Rewetting"
+            subtitle={`${division === ALL_BLOCKS ? "Estate" : division} rate from twin water table (cm/yr) · 10–${projection.endDay}`}
+            action={<OpenInTwin scenario="rewet" layer="waterTable" block={twinBlock} label="Simulasikan di Twin" />}
+          />
+          <div className="h-[180px] px-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={projection.data} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>
+                <CartesianGrid {...gridProps} />
+                <XAxis dataKey="day" {...axisProps} interval="preserveStartEnd" />
+                <YAxis domain={[0, 8]} {...axisProps} width={28} />
+                <Tooltip {...tooltipStyle} formatter={withUnit("cm/yr")} />
+                <ReferenceLine
+                  y={RATE_PP57}
+                  stroke={EWS_META.siaga.color}
+                  strokeDasharray="4 3"
+                  strokeOpacity={0.7}
+                  label={{ value: `PP 57 setara · ${RATE_PP57} cm/yr`, position: "insideTopLeft", fontSize: 9, fill: EWS_META.siaga.color }}
+                />
+                <Line dataKey="baseline" name="Baseline" type="monotone" stroke={EWS_META.siaga.color} strokeWidth={2.2} dot={false} />
+                <Line dataKey="rewet" name="Rewetting" type="monotone" stroke="#38bdf8" strokeWidth={2.2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="grid grid-cols-3 gap-2 border-t border-white/[0.06] px-4 py-3">
+            <div>
+              <span className="kicker block text-white/55">Baseline · {projection.endDay}</span>
+              <span className="block text-[15px] font-semibold tabular-nums" style={{ color: EWS_META[rateLevel(projection.baseEnd)].color }}>
+                {projection.baseEnd.toFixed(1)} cm/yr
+              </span>
+              <span className="text-[10.5px] text-white/55">Water table {fmtNum(projection.baseEndWt)} cm</span>
+            </div>
+            <div>
+              <span className="kicker block text-white/55">Rewetting · {projection.endDay}</span>
+              <span className="block text-[15px] font-semibold tabular-nums" style={{ color: EWS_META[rateLevel(projection.rewetEnd)].color }}>
+                {projection.rewetEnd.toFixed(1)} cm/yr
+              </span>
+              <span className="text-[10.5px] text-white/55">Water table {fmtNum(projection.rewetEndWt)} cm</span>
+            </div>
+            <div>
+              <span className="kicker block text-white/55">Avoided</span>
+              <span className="block text-[15px] font-semibold tabular-nums text-emerald-300">
+                {avoided > 0 ? "−" : ""}
+                {Math.abs(avoided).toFixed(1)} cm/yr
+              </span>
+              <span className="text-[10.5px] text-white/55">Gates 20% + canal blocking</span>
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader
+          kicker="SURVEI · TIANG PANTAU"
+          title="Subsidence Poles"
+          subtitle={`Survey 1 Sep 2024 · ${filteredPoles.length} of ${divisionPoles.length} poles · water table from reference borehole (live 10 Sep)`}
+          action={<ViewAll href="/reports" label="Survey Report" />}
+        />
+        <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2">
+          {FILTERS.map((f) => {
+            const on = statusFilter === f.key
             return (
               <button
-                key={f}
-                onClick={() => setStatusFilter(f)}
+                key={f.key}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setStatusFilter(f.key)}
                 className={cn(
                   "rounded-lg px-2.5 py-1 text-[11.5px] font-medium transition-colors",
-                  on
-                    ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
-                    : "text-white/45 hover:text-white/70"
+                  on ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30" : "text-white/55 hover:text-white/80"
                 )}
               >
-                {f}
+                {f.label}
+                <span className="ml-1 font-mono text-[10px] text-white/50">{levelCounts[f.key] ?? 0}</span>
               </button>
             )
           })}
         </div>
-        <table className="w-full text-left">
-          <thead>
-            <tr>
-              <th className={th}>Pole</th>
-              <th className={th}>Block</th>
-              <th className={th}>Rate (cm/yr)</th>
-              <th className={th}>Cumulative (cm)</th>
-              <th className={th}>Water Table (cm)</th>
-              <th className={cn(th, "text-right")}>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredPoles.map((r) => {
-              const tone = poleTone(r.rate)
-              const s = statusStyle[tone]
-              return (
-                <tr
-                  key={r.pole}
-                  onClick={() =>
-                    toast(`${r.pole} · ${r.block}`, {
-                      description: `Laju ${r.rate.toFixed(1)} cm/thn · ${s.label} · muka air ${r.waterTable} cm`,
-                    })
-                  }
-                  className="cursor-pointer border-t border-white/5 hover:bg-white/[0.03]"
-                >
-                  <td className={cn(td, "font-medium text-white/85")}>{r.pole}</td>
-                  <td className={cn(td, "text-white/55")}>{r.block}</td>
-                  <td className={cn(td, s.text, "font-medium")}>{r.rate.toFixed(1)}</td>
-                  <td className={cn(td, "text-white/70")}>{r.cumulative.toFixed(1)}</td>
-                  <td className={cn(td, "font-medium", r.waterTable <= -45 ? "text-amber-400" : "text-sky-400")}>
-                    {r.waterTable}
+        <TableScroll>
+          <table className="w-full min-w-[720px] text-left">
+            <thead>
+              <tr>
+                <th className={tableTh}>Pole</th>
+                <th className={tableTh}>Block</th>
+                <th className={cn(tableTh, "text-right")}>Rate (cm/yr)</th>
+                <th className={cn(tableTh, "text-right")}>Cumulative (cm)</th>
+                <th className={cn(tableTh, "text-right")}>Water Table (cm)</th>
+                <th className={tableTh}>Status</th>
+                <th className={cn(tableTh, "text-right")}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPoles.map((r) => (
+                <tr key={r.pole} className={tableRow}>
+                  <td className={cn(tableTd, "font-mono font-medium text-white/85")}>{r.pole}</td>
+                  <td className={cn(tableTd, "text-white/60")}>{r.block}</td>
+                  <td className={cn(tableTd, "text-right font-medium tabular-nums")} style={{ color: EWS_META[r.level].color }}>
+                    {r.rate.toFixed(1)}
                   </td>
-                  <td className={cn(td, "text-right")}>
-                    <span className="inline-flex justify-end">
-                      <StatusPill tone={tone} />
+                  <td className={cn(tableTd, "text-right tabular-nums text-white/70")}>{r.cumulative.toFixed(1)}</td>
+                  <td className={cn(tableTd, "text-right tabular-nums")}>
+                    <span className="font-medium" style={{ color: EWS_META[ewsFromWaterTable(r.waterTable)].color }}>
+                      {fmtNum(r.waterTable)}
                     </span>
+                    <span className="ml-1.5 font-mono text-[10.5px] text-white/50">{r.ref}</span>
+                  </td>
+                  <td className={tableTd}>
+                    <EwsPill level={r.level} pulse={r.level === "awas"} />
+                  </td>
+                  <td className={cn(tableTd, "text-right")}>
+                    <OpenInTwin variant="icon" asset={r.ref} layer="waterTable" />
                   </td>
                 </tr>
-              )
-            })}
-            {filteredPoles.length === 0 && (
-              <tr className="border-t border-white/5">
-                <td className={cn(td, "text-white/40")} colSpan={6}>
-                  Tidak ada tiang dengan status {statusFilter}.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              ))}
+              {filteredPoles.length === 0 && (
+                <tr className={tableRow}>
+                  <td className={cn(tableTd, "text-center text-white/50")} colSpan={7}>
+                    Tidak ada tiang dengan status ini{division === ALL_BLOCKS ? "" : ` di ${division}`}.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </TableScroll>
       </Panel>
     </PeatShell>
   )
