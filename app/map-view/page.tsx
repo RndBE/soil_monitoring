@@ -378,7 +378,8 @@ export default function MapViewPage() {
 
       {/* Main map row */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
-        <div className="h-[520px]">
+        {/* xl: tinggi peta ikut kolom kanan (Legend + Quick Stats) supaya tidak ada celah */}
+        <div className="h-[520px] xl:h-auto xl:min-h-[520px]">
           <EstateMap
             title="Estate Asset Map"
             subtitle={`Live sensor & infrastructure positions · ${drawnMarkers.length} markers`}
