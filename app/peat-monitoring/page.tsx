@@ -622,7 +622,7 @@ export default function PeatMonitoringPage() {
               )
             })}
           </div>
-          <TableScroll>
+          <TableScroll className="max-h-[560px] overflow-y-auto [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-[1] [&_thead]:bg-[#0b1813]">
             <table className="w-full min-w-[820px] text-left">
               <thead>
                 <tr>

@@ -6,8 +6,14 @@ import { BoxIcon, LayersIcon, MapIcon, XIcon } from "lucide-react"
 
 import { mapLayers } from "@/lib/peatland/mock-data"
 import { useDashboardFilters } from "@/lib/peatland/filters"
+import { ALL_BLOCKS } from "@/lib/peatland/filter-logic"
+import { ASSET_TYPE_META, EWS_LEVELS, EWS_META } from "@/lib/peatland/digital-twin"
+import { STATION_TYPES, STATION_TYPE_LABEL } from "@/lib/peatland/stations"
+import { useTwinLive } from "@/lib/peatland/use-twin-live"
 import { cn } from "@/lib/utils"
 import { Panel } from "./panel"
+import { SensorIcon } from "./sensor-icon"
+import { OFFLINE_COLOR } from "./status"
 import { TwinPreview } from "./twin-preview"
 
 const EstateMapLeaflet = dynamic(() => import("./estate-map-leaflet"), {
@@ -19,13 +25,11 @@ const EstateMapLeaflet = dynamic(() => import("./estate-map-leaflet"), {
   ),
 })
 
-// Sama persis dengan warna marker di estate-map-leaflet (markerColor).
-const legend = [
-  { label: "Normal", color: "#22c55e" },
-  { label: "Warning", color: "#f59e0b" },
-  { label: "Critical", color: "#ef4444" },
-  { label: "Offline", color: "#64748b" },
-  { label: "Water Gate", color: "#38bdf8" },
+// Legenda marker: ikon = jenis sensor, titik di pojok = level EWS (lihat .peat-sensor).
+const SENSOR_TYPES = STATION_TYPES
+const LEVEL_LEGEND = [
+  ...EWS_LEVELS.map((l) => ({ label: EWS_META[l].label, color: EWS_META[l].color })),
+  { label: "Offline", color: OFFLINE_COLOR },
 ]
 
 type EstateMapProps = {
@@ -43,6 +47,9 @@ type EstateMapProps = {
   headerAction?: React.ReactNode
   /** Tampilkan tombol "2D Peta | 3D Twin" (twin 3D live di kartu yang sama). Default true. */
   twinToggle?: boolean
+  /** Sector terpilih di block aktif + handler klik sector (dipakai Map View). */
+  sector?: string | null
+  onSelectSector?: (id: string | null) => void
 }
 
 export function EstateMap({
@@ -54,10 +61,15 @@ export function EstateMap({
   subtitle,
   headerAction,
   twinToggle = true,
+  sector = null,
+  onSelectSector,
 }: EstateMapProps = {}) {
   const [mode, setMode] = useState<"2d" | "3d">("2d")
   const isControlled = controlledLayers != null
-  const { division } = useDashboardFilters()
+  const { division, setDivision, estate } = useDashboardFilters()
+  const { blockLevels: levels } = useTwinLive(estate)
+  // Klik wilayah block = filter division ke block itu (klik lagi = semua block).
+  const selectBlock = (block: string) => setDivision(division === block ? ALL_BLOCKS : block)
 
   const [internalLayers, setInternalLayers] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(mapLayers.map((l) => [l.key, l.enabled]))
@@ -144,7 +156,14 @@ export function EstateMap({
           <TwinPreview />
         ) : (
           <div className="absolute inset-0">
-            <EstateMapLeaflet layers={layers} division={division} />
+            <EstateMapLeaflet
+              layers={layers}
+              division={division}
+              levels={levels}
+              onSelectBlock={selectBlock}
+              sector={sector}
+              onSelectSector={onSelectSector}
+            />
           </div>
         )}
 
@@ -196,20 +215,34 @@ export function EstateMap({
 
       {/* Legend */}
       {mode === "2d" && (
-        <div className="flex flex-wrap items-center gap-4 border-t border-white/8 px-4 py-2.5">
-          {legend.map((l) => (
-            <div key={l.label} className="flex items-center gap-1.5">
-              <span className="size-2.5 rounded-full" style={{ background: l.color }} />
-              <span className="text-[11px] text-white/55">{l.label}</span>
-            </div>
-          ))}
-          <div className="flex items-center gap-1.5">
-            <span className="w-4 border-t-2 border-dashed border-[#5eead4]" />
-            <span className="text-[11px] text-white/55">Batas KHG</span>
+        <div className="flex flex-col gap-2 border-t border-white/8 px-4 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            {SENSOR_TYPES.map((t) => (
+              <div key={t} className="flex items-center gap-1.5">
+                <SensorIcon type={t} style={{ color: ASSET_TYPE_META[t].color }} />
+                <span className="text-[11px] text-white/55">{STATION_TYPE_LABEL[t]}</span>
+              </div>
+            ))}
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-4 border-t-2 border-[#38bdf8]" />
-            <span className="text-[11px] text-white/55">Sungai &amp; parit</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            {LEVEL_LEGEND.map((l) => (
+              <div key={l.label} className="flex items-center gap-1.5">
+                <span className="size-2 rounded-full" style={{ background: l.color }} />
+                <span className="text-[11px] text-white/55">{l.label}</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5">
+              <span className="w-4 border-t-2 border-[#fbbf24]" />
+              <span className="text-[11px] text-white/55">Batas block</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-4 border-t border-dashed border-white/70" />
+              <span className="text-[11px] text-white/55">Sector</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-4 border-t-2 border-[#38bdf8]" />
+              <span className="text-[11px] text-white/55">Sungai &amp; parit</span>
+            </div>
           </div>
         </div>
       )}

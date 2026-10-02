@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
 import { JetBrains_Mono } from "next/font/google"
@@ -11,12 +11,15 @@ import {
   ClockIcon,
   CloudDrizzleIcon,
   CloudRainIcon,
+  DoorClosedIcon,
   DropletsIcon,
   FlameIcon,
   LayersIcon,
+  LayoutGridIcon,
   LinkIcon,
   MapIcon,
   MapPinIcon,
+  NavigationIcon,
   PauseIcon,
   PlayIcon,
   RadioTowerIcon,
@@ -27,6 +30,7 @@ import {
   SunIcon,
   TagIcon,
   TriangleAlertIcon,
+  WindIcon,
   WavesIcon,
   type LucideIcon,
 } from "lucide-react"
@@ -44,8 +48,11 @@ import {
 } from "recharts"
 import { toast } from "sonner"
 
+import { BlockDetail } from "@/components/peatland/block-detail"
+import { BlockStatusBoard } from "@/components/peatland/block-status"
 import { Panel } from "@/components/peatland/panel"
 import { PeatShell } from "@/components/peatland/peat-shell"
+import { SensorIcon } from "@/components/peatland/sensor-icon"
 import type {
   TwinCallout,
   TwinOverlays,
@@ -66,8 +73,17 @@ import {
   WT_COMPLIANCE,
   WT_CRITICAL,
   WT_FLOOD,
+  airQuality,
   areaBelowCompliance,
   assetReading,
+  blockEwsLevel,
+  burnedAreaHa,
+  fireGrowth,
+  fireIntensity,
+  floodedAreaHa,
+  hazeLevel,
+  reigniteIntensity,
+  windOf,
   buildHistoryFrames,
   co2Emission,
   ewsFromWaterTable,
@@ -87,9 +103,10 @@ import {
   type TwinFrame,
   type TwinLayer,
 } from "@/lib/peatland/digital-twin"
-import { matchesBlock } from "@/lib/peatland/filter-logic"
+import { BLOCK_ZONES, KHG_AREA_HA } from "@/lib/peatland/block-zones"
+import { ALL_BLOCKS, matchesBlock } from "@/lib/peatland/filter-logic"
 import { useDashboardFilters } from "@/lib/peatland/filters"
-import { STATIONS } from "@/lib/peatland/stations"
+import { STATIONS, gaugeRainfall, rainWeather } from "@/lib/peatland/stations"
 import { alerts, stations } from "@/lib/peatland/mock-data"
 import { cn } from "@/lib/utils"
 
@@ -157,6 +174,11 @@ const ASSET_PAGE: Record<TwinAsset["layer"], { href: string; label: string }> = 
   "water-gate": { href: "/map-view", label: "Pintu air" },
   "peat-station": { href: "/peat-monitoring", label: "Stasiun gambut" },
   "fire-hotspot": { href: "/fire-risk", label: "Fire risk" },
+  subsidence: { href: "/peat-monitoring/subsidence", label: "Subsidence" },
+  cctv: { href: "/", label: "CCTV" },
+  gateway: { href: "/map-view", label: "Jaringan" },
+  repeater: { href: "/map-view", label: "Jaringan" },
+  aws: { href: "/weather-rainfall", label: "Cuaca" },
 }
 
 const OFFLINE_COLOR = "#64748b"
@@ -178,6 +200,11 @@ const SIM_TITLE: Record<TwinAsset["layer"], string> = {
   "water-gate": "Simulasi pintu air",
   "peat-station": "Simulasi kelembapan tanah",
   "fire-hotspot": "Simulasi risiko api",
+  subsidence: "Simulasi laju subsidence",
+  cctv: "Status kamera",
+  gateway: "Status gateway",
+  repeater: "Status repeater",
+  aws: "Simulasi suhu udara",
 }
 
 // Ambang yang digambar di sparkline, per jenis aset.
@@ -189,6 +216,9 @@ const THRESHOLDS: Partial<Record<TwinAsset["layer"], { siaga: number; awas: numb
 
 const LAYER_TOGGLES: { key: keyof TwinOverlays; label: string; icon: LucideIcon }[] = [
   { key: "imagery", label: "Citra", icon: SatelliteIcon },
+  { key: "blocks", label: "Block & sector", icon: LayoutGridIcon },
+  { key: "fleet", label: "Semua stasiun", icon: RadioTowerIcon },
+  { key: "fire", label: "Api & asap", icon: FlameIcon },
   { key: "canals", label: "Sungai & parit", icon: WavesIcon },
   { key: "zones", label: "Zona kritis", icon: TriangleAlertIcon },
   { key: "theme", label: "Tema data", icon: LayersIcon },
@@ -205,6 +235,9 @@ const LEGEND_TYPES: (keyof typeof ASSET_TYPE_META)[] = [
   "water-gate",
   "peat-station",
   "fire-hotspot",
+  "aws",
+  "gateway",
+  "cctv",
 ]
 
 const HORIZONS = [3, 7, 14]
@@ -228,16 +261,159 @@ const MODES: { key: TwinMode; label: string; icon: LucideIcon; hint: string }[] 
 const MODE_PRESET: Record<TwinMode, { overlays: Partial<TwinOverlays>; layer?: TwinLayer }> = {
   monitoring: { overlays: { canals: true, zones: true, theme: false, rain: true, links: false, labels: true } },
   hidrologi: { overlays: { canals: true, zones: false, theme: true, rain: true, links: false, labels: true }, layer: "waterTable" },
-  kebakaran: { overlays: { canals: false, zones: false, theme: true, rain: true, links: false, labels: true }, layer: "fireRisk" },
+  kebakaran: { overlays: { canals: false, zones: false, theme: true, rain: true, links: false, labels: true, fire: true }, layer: "fireRisk" },
   jaringan: { overlays: { canals: true, zones: false, theme: false, rain: false, links: true, labels: true } },
 }
+// Simulasi kejadian langsung di panggung 3D: pilih → skenario diterapkan, mode yang cocok
+// dinyalakan, lalu prakiraan diputar dari kini sampai akhir horizon (hujan, api, banjir terlihat).
+const ALL_EVENTS: { key: string; label: string; icon: LucideIcon; hint: string; mode: TwinMode }[] = [
+  { key: "baseline", label: "Normal", icon: ActivityIcon, hint: "Baseline · hujan 4 mm/hari, pintu air 60%", mode: "monitoring" },
+  { key: "wet", label: "Hujan lebat", icon: CloudRainIcon, hint: "35 mm/hari · badai di semua penakar, genangan, api padam", mode: "monitoring" },
+  { key: "dry", label: "Kemarau", icon: SunIcon, hint: "Tanpa hujan · muka air turun, risiko api naik", mode: "kebakaran" },
+  { key: "fire", label: "Kebakaran", icon: FlameIcon, hint: "Kemarau + drainase berlebih · api menyebar, hotspot lama menyala lagi", mode: "kebakaran" },
+  { key: "retain", label: "Tutup pintu", icon: DoorClosedIcon, hint: "Bukaan pintu air 20% · muka air tertahan", mode: "hidrologi" },
+  { key: "rewet", label: "Pembasahan", icon: DropletsIcon, hint: "Sekat kanal + pintu 20% · gambut dibasahi kembali", mode: "hidrologi" },
+]
+// Untuk sementara pilihan skenario hanya Normal → Hujan lebat → Kebakaran. Kemarau, Tutup pintu
+// dan Pembasahan tetap bisa dibuka lewat tautan ?scenario= dari halaman lain; tambahkan key-nya
+// di sini untuk menampilkannya lagi.
+const SHOWN_SCENARIOS = ["baseline", "wet", "fire"]
+const EVENTS = ALL_EVENTS.filter((e) => SHOWN_SCENARIOS.includes(e.key))
+const PICKER_PRESETS = SCENARIO_PRESETS.filter((p) => SHOWN_SCENARIOS.includes(p.key))
+
 const MODE_TYPES: Partial<Record<TwinMode, TwinAsset["layer"][]>> = {
-  hidrologi: ["borehole", "water-station", "water-gate"],
-  kebakaran: ["fire-hotspot", "peat-station", "rain-gauge"],
+  hidrologi: ["borehole", "water-station", "water-gate", "subsidence"],
+  kebakaran: ["fire-hotspot", "peat-station", "rain-gauge", "aws", "cctv"],
 }
 const cardCls =
   "rounded-2xl border border-[var(--tw-line)] bg-gradient-to-b from-white/[0.043] to-white/[0.016] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_14px_34px_rgba(2,8,24,0.22)] backdrop-blur-[8px] transition-colors hover:border-[var(--tw-line-strong)]"
 const labelCls = cn(mono.className, "text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--tw-ink-mute)]")
+
+// Dampak kejadian (≈ hasil model) untuk HUD di panggung: luas terbakar (hotspot twin + hotspot
+// lama yang bisa menyala lagi), luas tergenang, dan kabut asap. Sama dengan model visual scene.
+const RISK_HOTSPOTS = STATIONS.filter((s) => s.type === "fire-hotspot" && !s.twinId && !/palsu/i.test(s.note ?? ""))
+const ZONE_AREA: Record<string, number> = Object.fromEntries(BLOCK_ZONES.map((z) => [z.block, z.areaHa]))
+
+function measureEvent(f: TwinFrame, live: TwinFrame, days: number, canalBlocking: boolean) {
+  const growth = fireGrowth(f, days, canalBlocking)
+  let burned = 0
+  for (const a of TWIN_ASSETS) {
+    if (a.layer !== "fire-hotspot") continue
+    const r = assetReading(a, f, live)
+    if (r.value == null) continue
+    burned += burnedAreaHa(fireIntensity(r.level, r.value) * growth, r.value)
+  }
+  for (const s of RISK_HOTSPOTS) {
+    const i = reigniteIntensity(f, days, f.blocks[s.block]?.fireRisk ?? 0) * (canalBlocking ? growth : 1)
+    burned += burnedAreaHa(i, 4 + 10 * i)
+  }
+  return { burned, flooded: floodedAreaHa(f, ZONE_AREA, KHG_AREA_HA), haze: hazeLevel(burned) }
+}
+
+function levelsOf(f: TwinFrame, live: TwinFrame): Record<string, EwsLevel> {
+  return Object.fromEntries(
+    TWIN_BLOCKS.map((b) => [
+      b,
+      blockEwsLevel(
+        f.blocks[b].waterTable,
+        TWIN_ASSETS.filter((a) => a.block === b && a.layer === "fire-hotspot").map((a) => assetReading(a, f, live).level)
+      ),
+    ])
+  )
+}
+
+const fmtHa = (v: number) => `${(Math.round(v / 10) * 10).toLocaleString("id-ID")} ha`
+const fmtDelta = (v: number, unit = "") => (Math.abs(v) < 0.5 ? "±0" : `${v > 0 ? "+" : "−"}${Math.abs(Math.round(v)).toLocaleString("id-ID")}${unit}`)
+
+// --- Monitoring live (data dummy), pola twin beacon-compro ------------------------------
+// Di posisi "Kini" sampel baru datang tiap LIVE_MS: nilai = bacaan live + amplitudo × noise
+// halus (fungsi murni dari tick & id), jadi grafik streaming bisa dihitung ulang tanpa state
+// dan level EWS tidak ikut berkedip. Tiap sensor punya irama kirim 1–3 tick.
+const LIVE_MS = 2500
+const LIVE_SAMPLES = 40
+const LIVE_AMP: Partial<Record<TwinAsset["layer"], number>> = {
+  borehole: 0.8,
+  "water-station": 0.8,
+  "peat-station": 0.6,
+  "fire-hotspot": 0.5,
+  aws: 0.15,
+}
+const seedOf = (id: string) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 9973, 17)
+const liveNoise = (id: string, tick: number) => {
+  const s = seedOf(id)
+  return 0.6 * Math.sin(tick * 0.83 + s) + 0.4 * Math.sin(tick * 0.29 + s * 1.7)
+}
+const liveValue = (id: string, layer: TwinAsset["layer"], base: number, tick: number) => base + (LIVE_AMP[layer] ?? 0) * liveNoise(id, tick)
+const sampleEvery = (id: string) => 1 + (seedOf(id) % 3)
+const fmtLive = (v: number, unit: string) => {
+  const n = Number.isInteger(v) ? String(v) : v.toFixed(1)
+  return unit === "%" ? `${n}%` : `${n} ${unit}`
+}
+
+// Feed kejadian live: diputar dari registri; stasiun Siaga/Awas/offline muncul lebih sering.
+const FEED_LABEL: Record<TwinAsset["layer"], string> = {
+  borehole: "Muka air",
+  "water-station": "Muka air",
+  "rain-gauge": "Hujan 24 jam",
+  "water-gate": "Bukaan pintu",
+  "peat-station": "Kelembapan",
+  "fire-hotspot": "FRP",
+  subsidence: "Subsidence",
+  cctv: "Stream",
+  gateway: "Node aktif",
+  repeater: "RSSI",
+  aws: "Suhu udara",
+}
+const FEED_POOL = (() => {
+  const urgent = STATIONS.filter((s) => s.level === "awas" || s.level === "siaga" || s.level === "offline")
+  const rest = STATIONS.filter((s) => !urgent.includes(s))
+  const out: typeof STATIONS = []
+  rest.forEach((s, i) => {
+    out.push(s)
+    if (i % 3 === 0) out.push(urgent[(i / 3) % urgent.length])
+  })
+  return out
+})()
+type FeedEvent = { key: string; code: string; text: string; level: EwsLevel | "offline"; at: number }
+function feedEvent(k: number, at: number): FeedEvent {
+  const s = FEED_POOL[((k * 7) % FEED_POOL.length + FEED_POOL.length) % FEED_POOL.length]
+  if (s.value == null) return { key: `${k}`, code: s.code, text: `tidak ada uplink sejak ${s.lastSeen}`, level: "offline", at }
+  const v = liveValue(s.code, s.type, s.value, k)
+  return { key: `${k}`, code: s.code, text: `${FEED_LABEL[s.type]} ${fmtLive(v, s.unit)}`, level: s.level, at }
+}
+
+/** Grafik streaming sampel live sensor terpilih (paling kanan = terbaru). */
+function LiveStream({ values, color }: { values: number[]; color: string }) {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || 1
+  const pts = values.map((v, i) => `${((i / (values.length - 1)) * 100).toFixed(2)},${(26 - ((v - min) / span) * 22).toFixed(2)}`)
+  const last = pts[pts.length - 1].split(",")
+  return (
+    <svg viewBox="0 0 100 28" preserveAspectRatio="none" className="block h-[30px] w-full overflow-visible" aria-hidden>
+      <polyline points={`0,28 ${pts.join(" ")} 100,28`} fill={color} fillOpacity={0.12} stroke="none" />
+      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />
+      <circle cx={last[0]} cy={last[1]} r={1.6} fill={color} className="twin-live-pulse" />
+    </svg>
+  )
+}
+
+/** "update n dtk lalu" untuk sampel terakhir sensor terpilih (berjalan tiap detik). */
+function SampleAgo({ at, every, tick }: { at: number; every: number; tick: number }) {
+  const now = useNow()
+  if (!now || !at) return <>—</>
+  const ms = (tick % every) * LIVE_MS + Math.max(0, now.getTime() - at)
+  const s = Math.round(ms / 1000)
+  return <>{s <= 1 ? "baru saja" : `${s} dtk lalu`}</>
+}
+
+/** Aset `cur` bila sudah di block itu; selain itu borehole pertama (atau aset pertama) block. */
+function assetInBlock(cur: string, block: string): string {
+  const current = TWIN_ASSETS.find((a) => a.id === cur)
+  if (current && current.block === block) return cur
+  const inBlock = TWIN_ASSETS.filter((a) => a.block === block)
+  return (inBlock.find((a) => a.layer === "borehole") ?? inBlock[0])?.id ?? cur
+}
 
 function formatWt(v: number) {
   return `${v > 0 ? "+" : ""}${v} cm`
@@ -647,6 +823,9 @@ export default function DigitalTwinPage() {
   const [overlays, setOverlays] = useState<TwinOverlays>({
     imagery: true,
     canals: true,
+    blocks: true,
+    fleet: true,
+    fire: true,
     zones: true,
     theme: false,
     rain: true,
@@ -666,13 +845,23 @@ export default function DigitalTwinPage() {
   // Division di header memfokuskan kartu sensor ke aset pertama block tersebut.
   useEffect(() => {
     if (!TWIN_BLOCKS.includes(division)) return
-    setSelectedId((cur) => {
-      const current = TWIN_ASSETS.find((a) => a.id === cur)
-      if (current && current.block === division) return cur
-      const inBlock = TWIN_ASSETS.filter((a) => a.block === division)
-      return (inBlock.find((a) => a.layer === "borehole") ?? inBlock[0])?.id ?? cur
-    })
+    setSelectedId((cur) => assetInBlock(cur, division))
   }, [division])
+
+  // Klik block (tile, wilayah, atau badge di model): filter + kamera ke block; klik lagi = semua.
+  // Sensor terpilih ikut dipindah di render yang sama supaya kamera berakhir di block, bukan sensor.
+  function focusBlock(block: string) {
+    setSectorSel(null)
+    if (division === block) {
+      setDivision(ALL_BLOCKS)
+      setView((v) => ({ mode: "reset", nonce: v.nonce + 1 }))
+      return
+    }
+    setDivision(block)
+    setSelectedId((cur) => assetInBlock(cur, block))
+    setAutoRotate(false)
+    setView((v) => ({ mode: "block", id: block, nonce: v.nonce + 1 }))
+  }
 
   useEffect(() => {
     if (!playing) return
@@ -688,8 +877,38 @@ export default function DigitalTwinPage() {
     if (playing && pos >= frames.length - 1) setPlaying(false)
   }, [playing, pos, frames.length])
 
+  // Tick monitoring live (data dummy) — hanya berjalan saat tab terlihat.
+  const [live, setLive] = useState({ tick: 0, at: 0 })
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!document.hidden) setLive((l) => ({ tick: l.tick + 1, at: Date.now() }))
+    }, LIVE_MS)
+    return () => clearInterval(id)
+  }, [])
+  const liveOn = offset === 0
+
   const selected = TWIN_ASSETS.find((a) => a.id === selectedId) ?? TWIN_ASSETS[0]
-  const reading = assetReading(selected, frame, liveFrame)
+  const baseReading = assetReading(selected, frame, liveFrame)
+  const liveAmp = LIVE_AMP[selected.layer] ?? 0
+  const reading =
+    liveOn && baseReading.value != null && liveAmp
+      ? (() => {
+          const v = liveValue(selected.id, selected.layer, baseReading.value, live.tick)
+          return { ...baseReading, value: v, text: fmtLive(v, baseReading.unit) }
+        })()
+      : baseReading
+  const liveStream =
+    liveOn && baseReading.value != null && liveAmp
+      ? Array.from({ length: LIVE_SAMPLES }, (_, k) => liveValue(selected.id, selected.layer, baseReading.value as number, live.tick - LIVE_SAMPLES + 1 + k))
+      : null
+  const feed = liveOn && live.at ? [0, 1, 2].map((d) => feedEvent(live.tick - d, live.at - d * LIVE_MS)) : []
+  const ping = useMemo(
+    () => ({
+      ids: liveOn ? TWIN_ASSETS.filter((a) => a.status !== "offline" && live.tick % sampleEvery(a.id) === 0).map((a) => a.id) : [],
+      nonce: live.tick,
+    }),
+    [liveOn, live.tick]
+  )
   const typeMeta = ASSET_TYPE_META[selected.layer]
   const threshold = THRESHOLDS[selected.layer]
   const series = useMemo(() => {
@@ -713,10 +932,39 @@ export default function DigitalTwinPage() {
         }
         continue
       }
+      if (liveOn && r.value != null && LIVE_AMP[a.layer]) {
+        const v = liveValue(a.id, a.layer, r.value, live.tick)
+        out[a.id] = { text: fmtLive(v, r.unit), level: r.level, value: v }
+        continue
+      }
       out[a.id] = { text: estimated && r.value != null ? `≈ ${r.text}` : r.text, level: r.level, value: r.value }
     }
     return out
-  }, [frame, liveFrame, mode])
+  }, [frame, liveFrame, mode, liveOn, live.tick])
+
+  // Sector terpilih (hanya berlaku di block yang sedang dipilih). Klik sector = kamera ke sector,
+  // klik lagi = kembali ke seluruh block.
+  const [sectorSel, setSectorSel] = useState<{ block: string; id: string } | null>(null)
+  const activeSector = sectorSel && sectorSel.block === division ? sectorSel.id : null
+  function focusSector(id: string | null) {
+    if (!TWIN_BLOCKS.includes(division)) return
+    setSectorSel(id ? { block: division, id } : null)
+    setAutoRotate(false)
+    setView((v) => (id ? { mode: "sector", id: `${division}:${id}`, nonce: v.nonce + 1 } : { mode: "block", id: division, nonce: v.nonce + 1 }))
+  }
+
+  // Level EWS tiap block pada frame tampil: muka air block + hotspot aktif di block itu.
+  const blockLevels = useMemo(() => levelsOf(frame, liveFrame), [frame, liveFrame])
+  const liveLevels = useMemo(() => levelsOf(liveFrame, liveFrame), [liveFrame])
+  const activeHotspots = TWIN_ASSETS.filter((a) => {
+    if (a.layer !== "fire-hotspot") return false
+    const lv = assetReading(a, frame, liveFrame).level
+    return lv !== "normal" && lv !== "offline"
+  })
+  const sensorsPerBlock = useMemo(
+    () => Object.fromEntries(TWIN_BLOCKS.map((b) => [b, TWIN_ASSETS.filter((a) => a.block === b).length])),
+    []
+  )
 
   // Label yang tampil per mode (sensor terpilih selalu tampil).
   const labelIds = useMemo(() => {
@@ -738,15 +986,12 @@ export default function DigitalTwinPage() {
   }
 
   // Cuaca tiap penakar hujan untuk sel hujan di model: cerah / gerimis / deras.
+  // Semua penakar di registri (dikunci kode stasiun), bukan hanya yang dimodelkan.
   const weather = useMemo(() => {
     const out: Record<string, TwinWeather> = {}
-    for (const a of TWIN_ASSETS) {
-      if (a.layer !== "rain-gauge") continue
-      const mm = assetReading(a, frame, liveFrame).value ?? 0
-      out[a.id] = mm >= 25 ? "alarm" : mm > 0.5 ? "warn" : "ok"
-    }
+    for (const [code, mm] of Object.entries(gaugeRainfall(frame))) out[code] = rainWeather(mm, frame.kind === "live")
     return out
-  }, [frame, liveFrame])
+  }, [frame])
 
   const scopeBlocks = useMemo(() => TWIN_BLOCKS.filter((b) => matchesBlock(b, division)), [division])
   const endFrame = forecast[forecast.length - 1]
@@ -804,6 +1049,27 @@ export default function DigitalTwinPage() {
       co2Share: summary.co2 / (totalArea * 0.91 * 80),
     }
   }, [baseline, scopeBlocks, frame, frames, pos])
+
+  // Dampak kejadian vs live untuk HUD panggung, kabut asap, badai, dan angin.
+  const canalBlockingNow = offset > 0 && scenario.canalBlocking
+  const event = useMemo(() => measureEvent(frame, liveFrame, offset, canalBlockingNow), [frame, liveFrame, offset, canalBlockingNow])
+  const eventLive = useMemo(() => measureEvent(liveFrame, liveFrame, 0, false), [liveFrame])
+  const liveSummary = useMemo(() => summarizeFrame(liveFrame, baseline, scopeBlocks), [liveFrame, baseline, scopeBlocks])
+  const air = airQuality(event.haze)
+  const wind = windOf(frame)
+  const weatherValues = Object.values(weather)
+  const storm = weatherValues.filter((w) => w === "alarm").length / Math.max(1, weatherValues.length)
+  const awasNow = Object.values(blockLevels).filter((l) => l === "awas").length
+  const awasLive = Object.values(liveLevels).filter((l) => l === "awas").length
+  const simEnded = !playing && offset > 0 && pos >= frames.length - 1
+  const wtDelta = impact.summary.waterTable - liveSummary.waterTable
+  const simNotes = [
+    event.burned - eventLive.burned > 20 && `Api meluas ±${fmtHa(event.burned - eventLive.burned)}`,
+    eventLive.burned - event.burned > 20 && `Api mereda ±${fmtHa(eventLive.burned - event.burned)}`,
+    event.flooded - eventLive.flooded > 50 && `genangan bertambah ±${fmtHa(event.flooded - eventLive.flooded)}`,
+    Math.abs(wtDelta) >= 2 && `muka air rata-rata ${fmtDelta(wtDelta, " cm")}`,
+    air.level !== "normal" && `udara ${air.label.toLowerCase()} (ISPU ${air.ispu})`,
+  ].filter(Boolean) as string[]
 
   const rainChips = ["RG-01", "RG-04"]
     .map((code) => TWIN_ASSETS.find((a) => a.code === code))
@@ -889,6 +1155,24 @@ export default function DigitalTwinPage() {
     setPreset(key)
     setScenario((s) => ({ ...s, ...p.scenario }))
     toast(`Skenario: ${p.label}`)
+  }
+
+  // Simulasi dari bar di panggung: terapkan skenario + mode, lalu putar prakiraan dari kini.
+  function simulate(key: string) {
+    const ev = EVENTS.find((e) => e.key === key)
+    if (!ev) return
+    applyPreset(key)
+    applyMode(ev.mode)
+    setOverlays((o) => ({ ...o, rain: true, fire: true }))
+    setTimePos(liveIndex)
+    setPlaying(true)
+    // Kamera ke lokasi kejadian: api di HS-02, pintu air WTG-03, sekat kanal di block terdrainase
+    // (Block C); hujan & normal = seluruh estate.
+    setAutoRotate(false)
+    const focus: Record<string, string> = { fire: "m15", dry: "m15", retain: "m13" }
+    if (focus[key]) setView((v) => ({ mode: "focus", id: focus[key], nonce: v.nonce + 1 }))
+    else if (key === "rewet") setView((v) => ({ mode: "block", id: "Block C", nonce: v.nonce + 1 }))
+    else setView((v) => ({ mode: "reset", nonce: v.nonce + 1 }))
   }
 
   function updateScenario(patch: Partial<Scenario>) {
@@ -1016,6 +1300,33 @@ export default function DigitalTwinPage() {
           <LiveClock />
         </div>
 
+        {/* Status block (dashboard digital twin): klik tile = fokus model ke block */}
+        <div className={cn(cardCls, "p-3.5")}>
+          <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className={labelCls}>
+              Status block · KHG {KHG_AREA_HA.toLocaleString("id-ID")} ha · {BLOCK_ZONES.length} block × 5 sector
+            </span>
+            <span className={cn(mono.className, "text-[10.5px] text-[var(--tw-ink-mute)]")}>
+              {offset === 0 ? "Kini" : `${offset > 0 ? "Prakiraan" : "Replay"} ${offsetLabel(offset)}`} · klik block untuk fokus
+            </span>
+          </div>
+          <BlockStatusBoard
+            levels={blockLevels}
+            sensors={sensorsPerBlock}
+            selected={division}
+            onSelect={focusBlock}
+            stats={[
+              { label: "Total sensor", value: String(stations.total), sub: `${stations.percent}% online` },
+              {
+                label: "Hotspot aktif",
+                value: String(activeHotspots.length),
+                sub: activeHotspots.map((a) => a.code).join(", ") || "—",
+                color: activeHotspots.length ? EWS_META.awas.color : undefined,
+              },
+            ]}
+          />
+        </div>
+
         <div className="grid gap-[14px] xl:grid-cols-[minmax(0,1fr)_350px]">
           {/* Panggung 3D */}
           <section
@@ -1041,12 +1352,21 @@ export default function DigitalTwinPage() {
                 autoRotate={autoRotate}
                 view={view}
                 callouts={callouts}
+                blockLevels={blockLevels}
                 monoFont={mono.style.fontFamily}
                 onSelect={setSelectedId}
+                onSelectBlock={focusBlock}
+                sector={activeSector}
+                onSelectSector={focusSector}
+                simDays={offset}
+                canalBlocking={canalBlockingNow}
+                haze={event.haze}
+                storm={storm}
                 onAzimuth={onAzimuth}
                 onTiles={(loaded, total) => setTiles({ loaded, total })}
                 weather={weather}
                 labelIds={labelIds}
+                ping={ping}
                 onUserOrbit={() => setAutoRotate(false)}
               />
             </div>
@@ -1060,6 +1380,19 @@ export default function DigitalTwinPage() {
                   : "bg-[radial-gradient(130%_100%_at_50%_45%,transparent_65%,rgba(2,6,4,0.32)_100%)]"
               )}
             />
+            {/* Kabut asap & badai: rona di atas model (tanpa blur supaya animasi tetap lancar). */}
+            {event.haze > 0.02 && (
+              <div
+                className="pointer-events-none absolute inset-0 z-[3] transition-[background] duration-700"
+                style={{
+                  background: `linear-gradient(180deg, rgba(122,98,72,${(0.46 * event.haze).toFixed(3)}) 0%, rgba(150,122,90,${(0.32 * event.haze).toFixed(3)}) 50%, rgba(110,90,70,${(0.2 * event.haze).toFixed(3)}) 100%)`,
+                }}
+              />
+            )}
+            {storm > 0.05 && (
+              <div className="pointer-events-none absolute inset-0 z-[3] transition-[background] duration-700" style={{ background: `rgba(6,14,28,${(0.34 * storm).toFixed(3)})` }} />
+            )}
+            {storm > 0.5 && <div className="twin-lightning pointer-events-none absolute inset-0 z-[3]" />}
             {/* Prakiraan: rona biru di tepi panggung supaya tidak dikira data live. */}
             {offset > 0 && (
               <div className="pointer-events-none absolute inset-0 z-[3] bg-[radial-gradient(130%_100%_at_50%_50%,transparent_60%,rgba(56,189,248,0.14)_100%)]" />
@@ -1111,6 +1444,29 @@ export default function DigitalTwinPage() {
                     <span className="sr-only sm:not-sr-only">{label}</span>
                   </button>
                 ))}
+              </div>
+              <div className={cn(glass, "pointer-events-auto flex w-fit max-w-full flex-wrap items-center gap-[3px] rounded-xl p-[3px]")} role="group" aria-label="Simulasi kejadian">
+                <span className={cn(mono.className, "px-2 text-[9px] font-bold uppercase tracking-[0.16em] text-[var(--tw-ink-mute)]")}>Simulasi</span>
+                {EVENTS.map(({ key, label, icon: Icon, hint }) => {
+                  const on = preset === key && offset > 0
+                  return (
+                    <button
+                      key={key}
+                      aria-pressed={on}
+                      title={hint}
+                      onClick={() => simulate(key)}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-[9px] border px-2.5 py-[5px] text-[11.5px] font-semibold transition-colors",
+                        on
+                          ? "border-sky-300/50 bg-[rgba(14,116,144,0.4)] text-sky-50"
+                          : "border-transparent text-[var(--tw-ink-soft)] hover:text-[var(--tw-ink)]"
+                      )}
+                    >
+                      <Icon className="size-3.5 shrink-0" />
+                      <span className="sr-only md:not-sr-only">{label}</span>
+                    </button>
+                  )
+                })}
               </div>
               {offset !== 0 && (
                 <div
@@ -1246,6 +1602,61 @@ export default function DigitalTwinPage() {
                   <ThemeLegend layer={layer} />
                 </div>
               )}
+              {offset > 0 && (
+                <div className={cn(glass, "pointer-events-auto w-[236px] rounded-xl p-2.5 shadow-[0_12px_32px_rgba(0,0,0,0.4)]")}>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <span className={cn(mono.className, "text-[9px] font-bold uppercase tracking-[0.16em] text-sky-200/85")}>
+                      {simEnded ? "Ringkasan simulasi" : "Dampak simulasi"}
+                    </span>
+                    <span className={cn(mono.className, "text-[10px] font-bold text-[var(--tw-ink)]")}>+{spanLabel(offset)}</span>
+                  </div>
+                  <span className={cn(mono.className, "mb-1.5 block truncate text-[10px] text-[var(--tw-ink-mute)]")}>
+                    {SCENARIO_PRESETS.find((x) => x.key === preset)?.label ?? "Kustom"} · {frame.label} · vs kini
+                  </span>
+                  <dl className={cn(mono.className, "grid grid-cols-[1fr_auto] gap-x-3 gap-y-[3px] text-[11px]")}>
+                    {[
+                      { k: "Area terbakar", v: fmtHa(event.burned), d: fmtDelta(Math.round((event.burned - eventLive.burned) / 10) * 10), bad: event.burned - eventLive.burned > 5 },
+                      { k: "Tergenang", v: fmtHa(event.flooded), d: fmtDelta(Math.round((event.flooded - eventLive.flooded) / 10) * 10), bad: event.flooded - eventLive.flooded > 20 },
+                      { k: "Block Awas", v: `${awasNow} / ${TWIN_BLOCKS.length}`, d: fmtDelta(awasNow - awasLive), bad: awasNow > awasLive },
+                      { k: "Muka air rata²", v: `${impact.summary.waterTable} cm`, d: fmtDelta(wtDelta), bad: wtDelta < -1 },
+                      { k: "Emisi CO₂", v: `${(impact.summary.co2 / 1000).toFixed(1)} kt/th`, d: fmtDelta(((impact.summary.co2 - liveSummary.co2) / Math.max(1, liveSummary.co2)) * 100, "%"), bad: impact.summary.co2 > liveSummary.co2 },
+                    ].map((r) => (
+                      <Fragment key={r.k}>
+                        <dt className="text-[var(--tw-ink-mute)]">{r.k}</dt>
+                        <dd className="text-right font-bold text-[var(--tw-ink)]">
+                          {r.v}{" "}
+                          <span className={cn("text-[9.5px] font-semibold", r.d === "±0" ? "text-[var(--tw-ink-mute)]" : r.bad ? "text-[var(--tw-danger)]" : "text-[var(--tw-ok)]")}>{r.d}</span>
+                        </dd>
+                      </Fragment>
+                    ))}
+                    <dt className="text-[var(--tw-ink-mute)]">Udara (ISPU)</dt>
+                    <dd className="text-right font-bold" style={{ color: EWS_META[air.level].color }}>
+                      {air.ispu} · {air.label}
+                    </dd>
+                    <dt className="text-[var(--tw-ink-mute)]">Jarak pandang</dt>
+                    <dd className="text-right font-bold text-[var(--tw-ink)]">{air.visibilityKm} km</dd>
+                  </dl>
+                  {simEnded && (
+                    <div className="mt-2 border-t border-[var(--tw-line)] pt-2">
+                      <p className="text-[11px] leading-snug text-[var(--tw-ink-2)]">
+                        {simNotes.length ? simNotes.join(" · ") : "Tidak ada perubahan berarti dibanding kondisi kini."}
+                      </p>
+                      <div className="mt-2 flex gap-1.5">
+                        <button
+                          onClick={() => simulate(preset)}
+                          disabled={!EVENTS.some((e) => e.key === preset)}
+                          className={cn(mono.className, "rounded-lg border border-sky-300/40 bg-sky-500/15 px-2.5 py-1 text-[10.5px] font-bold text-sky-100 disabled:opacity-40")}
+                        >
+                          Ulangi
+                        </button>
+                        <button onClick={goLive} className={cn(mono.className, "rounded-lg border border-[var(--tw-line)] px-2.5 py-1 text-[10.5px] font-bold text-[var(--tw-ink-2)]")}>
+                          Kembali ke kini
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Bawah: legenda, atribusi, timeline simulasi */}
@@ -1258,11 +1669,34 @@ export default function DigitalTwinPage() {
                   <ThemeLegend layer={layer} />
                 </div>
               )}
+              {feed.length > 0 && (
+                <div className={cn(glass, "pointer-events-auto hidden w-[330px] rounded-[10px] px-2.5 py-2 md:block")} aria-live="polite">
+                  <div className={cn(mono.className, "mb-1 flex items-center justify-between text-[9px] font-bold uppercase tracking-[0.16em] text-[var(--tw-ink-mute)]")}>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="twin-live-dot size-1.5" /> Feed telemetri · live
+                    </span>
+                    <span className="font-medium normal-case tracking-normal">LoRaWAN · {stations.online}/{stations.total} node</span>
+                  </div>
+                  <div className="flex flex-col gap-[3px]">
+                    {feed.map((e, i) => (
+                      <div key={e.key} className={cn(mono.className, "grid grid-cols-[58px_62px_1fr] items-center gap-2 text-[10.5px] transition-opacity", i === 0 ? "opacity-100" : i === 1 ? "opacity-75" : "opacity-50")}>
+                        <span className="text-[var(--tw-ink-mute)]">
+                          {new Date(e.at).toLocaleTimeString("en-GB", { timeZone: "Asia/Jakarta", hour12: false })}
+                        </span>
+                        <b className="truncate" style={{ color: levelColor(e.level) }}>
+                          {e.code}
+                        </b>
+                        <span className="truncate text-[var(--tw-ink-2)]">{e.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex items-end justify-between gap-3">
                 <div className={cn(glass, mono.className, "pointer-events-auto hidden flex-wrap gap-2.5 rounded-[10px] px-2.5 py-1.5 text-[10px] tracking-[0.06em] text-[var(--tw-ink-soft)] md:flex")}>
                   {LEGEND_TYPES.map((t) => (
                     <span key={t} className="inline-flex items-center gap-[5px]">
-                      <i className="size-2 rounded-full" style={{ background: ASSET_TYPE_META[t].color }} />
+                      <SensorIcon type={t} className="size-3" style={{ color: ASSET_TYPE_META[t].color }} />
                       {ASSET_TYPE_META[t].short}
                     </span>
                   ))}
@@ -1270,6 +1704,14 @@ export default function DigitalTwinPage() {
                     <i className="w-3.5 border-t-2 border-[#5eead4] shadow-[0_0_6px_#2dd4bf]" />
                     KHG
                   </span>
+                  {overlays.blocks && (
+                    <span className="inline-flex items-center gap-[5px]">
+                      <i className="w-3.5 border-t-2 border-[#fbbf24]" />
+                      BLOCK
+                      <i className="ml-1 w-3.5 border-t border-dashed border-white/70" />
+                      SECTOR
+                    </span>
+                  )}
                   {overlays.canals && (
                     <span className="inline-flex items-center gap-[5px]">
                       <i className="w-3.5 border-t-2 border-[#38bdf8]" />
@@ -1325,6 +1767,23 @@ export default function DigitalTwinPage() {
                       </span>
                     </div>
                     <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                      <span
+                        className={cn(mono.className, "hidden items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--tw-line)] bg-white/[0.04] px-[9px] py-1 text-[10.5px] font-bold text-[var(--tw-ink-2)] xl:inline-flex")}
+                        title={`Angin permukaan (AWS-01) bertiup ke ${wind.toward}`}
+                      >
+                        <WindIcon className="size-3.5" />
+                        {wind.speed} m/s
+                        <NavigationIcon className="size-3" style={{ transform: `rotate(${wind.deg - 45}deg)` }} />
+                      </span>
+                      {air.level !== "normal" && (
+                        <span
+                          className={cn(mono.className, "hidden items-center gap-1.5 whitespace-nowrap rounded-full border px-[9px] py-1 text-[10.5px] font-bold lg:inline-flex")}
+                          style={{ color: EWS_META[air.level].color, borderColor: `color-mix(in srgb, ${EWS_META[air.level].color} 45%, transparent)`, background: `color-mix(in srgb, ${EWS_META[air.level].color} 12%, transparent)` }}
+                          title={`Kabut asap · jarak pandang ${air.visibilityKm} km`}
+                        >
+                          ISPU {air.ispu}
+                        </span>
+                      )}
                       {rainChips.map((c) => (
                         <span
                           key={c.code}
@@ -1398,6 +1857,31 @@ export default function DigitalTwinPage() {
 
           {/* Kolom kanan */}
           <aside className={cn("flex min-h-0 flex-col gap-3 xl:overflow-y-auto xl:pr-0.5", railHeight)}>
+            {/* Detail block terpilih: sector & komponen (klik sector = kamera ke sector) */}
+            {TWIN_BLOCKS.includes(division) && (
+              <div className={cardCls}>
+                <div className="mb-2.5 flex items-center justify-between gap-2">
+                  <span className={labelCls}>
+                    Detail {division}
+                    {activeSector ? ` · ${activeSector}` : ""}
+                  </span>
+                  <button
+                    onClick={() => focusBlock(division)}
+                    className={cn(mono.className, "text-[10.5px] font-bold text-[#6ee7b7] hover:text-white")}
+                  >
+                    SEMUA BLOCK
+                  </button>
+                </div>
+                <BlockDetail
+                  variant="compact"
+                  block={division}
+                  level={blockLevels[division] ?? "normal"}
+                  selectedSector={activeSector}
+                  onSelectSector={focusSector}
+                />
+              </div>
+            )}
+
             {/* Kartu aset terpilih */}
             <div className={cardCls}>
               <div className="mb-2.5 flex items-center justify-between">
@@ -1427,6 +1911,19 @@ export default function DigitalTwinPage() {
                   {whenLabel}
                 </span>
               </div>
+              {liveStream && (
+                <div className="mb-2.5 rounded-[9px] border border-[var(--tw-line)] bg-[var(--tw-surface-2)] px-2.5 pb-1.5 pt-1.5">
+                  <div className={cn(mono.className, "mb-0.5 flex items-center justify-between text-[9.5px] uppercase tracking-[0.1em] text-[var(--tw-ink-mute)]")}>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="twin-live-dot size-1.5" /> Live · {LIVE_MS / 1000} dtk
+                    </span>
+                    <span className="normal-case tracking-normal">
+                      update <SampleAgo at={live.at} every={sampleEvery(selected.id)} tick={live.tick} />
+                    </span>
+                  </div>
+                  <LiveStream values={liveStream} color={sparkColor} />
+                </div>
+              )}
               {reading.value == null ? (
                 <div className={cn(mono.className, "flex h-[86px] items-center justify-center rounded-[10px] border border-dashed border-[var(--tw-line)] text-[11px] text-[var(--tw-ink-mute)]")}>
                   Sensor offline sejak {selected.lastSeen} · tidak ada data
@@ -1590,7 +2087,7 @@ export default function DigitalTwinPage() {
             </div>
             <div className="flex flex-col gap-4 px-4 pb-4 pt-2">
               <div className="flex flex-wrap gap-1.5">
-                {SCENARIO_PRESETS.map((p) => (
+                {PICKER_PRESETS.map((p) => (
                   <button
                     key={p.key}
                     onClick={() => applyPreset(p.key)}

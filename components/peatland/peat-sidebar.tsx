@@ -111,11 +111,11 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       {/* Brand */}
-      <Link href="/" onClick={onNavigate} className="flex items-center gap-2.5 px-4 py-4">
-        <BrandLogo className="size-9 shrink-0 drop-shadow-[0_2px_6px_rgba(0,0,0,0.4)]" />
-        <div className="grid leading-tight">
-          <span className="text-[11.5px] font-bold tracking-wide text-white">PEATLAND &amp; PLANTATION</span>
-          <span className="text-[9.5px] font-medium text-white/40">MONITORING SYSTEM</span>
+      <Link href="/" onClick={onNavigate} className="flex min-w-0 flex-col gap-2 overflow-hidden px-4 py-4">
+        <BrandLogo priority />
+        <div className="grid border-t border-white/[0.06] pt-2 leading-tight">
+          <span className="text-[10px] font-bold tracking-wide text-white/80">PEATLAND &amp; PLANTATION</span>
+          <span className="text-[9px] font-medium text-white/40">MONITORING SYSTEM</span>
         </div>
       </Link>
 

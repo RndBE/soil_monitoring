@@ -150,9 +150,9 @@ export default function LoginPage() {
 
         {/* Isi panel */}
         <div className="relative flex h-full flex-col justify-between p-10 xl:p-12">
-          <div className="flex items-center gap-3">
-            <BrandLogo className="size-11 shrink-0 drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]" />
-            <div className="grid leading-tight">
+          <div className="flex flex-wrap items-center gap-4">
+            <BrandLogo size="lg" priority />
+            <div className="grid border-l border-white/15 pl-4 leading-tight">
               <span className="text-[12px] font-bold tracking-[0.16em] text-white">
                 PEATLAND &amp; PLANTATION
               </span>
@@ -263,8 +263,8 @@ export default function LoginPage() {
       {/* ── Sisi formulir ─────────────────────────────────────────────── */}
       <section className="login-form-side relative flex flex-col items-center justify-center px-5 py-10 sm:px-10">
         {/* Lockup brand versi mobile */}
-        <div className="mb-7 flex items-center gap-2.5 lg:hidden">
-          <BrandLogo className="size-9 shrink-0" idPrefix="bl-login-mobile" />
+        <div className="mb-7 flex flex-col items-center gap-2.5 text-center lg:hidden">
+          <BrandLogo />
           <div className="grid leading-tight">
             <span className="text-[11.5px] font-bold tracking-[0.14em] text-white">
               PEATLAND &amp; PLANTATION

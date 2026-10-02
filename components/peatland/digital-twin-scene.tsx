@@ -19,13 +19,20 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 
 import {
   ASSET_TYPE_META,
+  BLOCK_COLOR,
+  EWS_META,
   LIVE_GATE_OPENING,
   TWIN_ASSETS,
   TWIN_BLOCKS,
   WT_COMPLIANCE,
   WT_CRITICAL,
   WT_FLOOD,
+  FIRE_SPREAD_THRESHOLDS,
+  burnRadiusM,
   clamp,
+  fireGrowth,
+  fireIntensity,
+  reigniteIntensity,
   fireRiskIndex,
   rampColor,
   type EwsLevel,
@@ -33,14 +40,24 @@ import {
   type TwinFrame,
   type TwinLayer,
 } from "@/lib/peatland/digital-twin"
+import { BLOCK_ZONES } from "@/lib/peatland/block-zones"
 import { matchesBlock } from "@/lib/peatland/filter-logic"
 import { lahanGambut } from "@/lib/peatland/lahan-gambut"
 import { canalLines } from "@/lib/peatland/map-points"
 import { estateWaterways } from "@/lib/peatland/estate-waterways"
+import { STATIONS, sectorSummaries } from "@/lib/peatland/stations"
+import { sensorSvg } from "./sensor-icon"
+import { buildDevice, type DeviceModel } from "./twin-devices"
 
 export type TwinOverlays = {
   imagery: boolean
   canals: boolean
+  /** Wilayah block berwarna + garis & label sector (lihat [[block-zones]]). */
+  blocks: boolean
+  /** Stasiun registri yang tidak dimodelkan penuh, sebagai pin kecil per jenis. */
+  fleet: boolean
+  /** Ilustrasi kebakaran (api, asap, bekas terbakar) di hotspot aktif. */
+  fire: boolean
   zones: boolean
   theme: boolean
   rain: boolean
@@ -49,8 +66,11 @@ export type TwinOverlays = {
   /** Efek pendar (bloom) seperti twin referensi. */
   bloom: boolean
 }
-/** Perintah kamera: utara, reset, fokus ke aset (`id` = m1..m17) atau ke block (`id` = "Block C"). */
-export type TwinView = { mode: "north" | "reset" | "focus" | "block"; nonce: number; id?: string }
+/**
+ * Perintah kamera: utara, reset, fokus ke aset (`id` = m1..m25), ke block (`id` = "Block C"),
+ * atau ke sector (`id` = "Block C:S3").
+ */
+export type TwinView = { mode: "north" | "reset" | "focus" | "block" | "sector"; nonce: number; id?: string }
 /** Teks, level EWS, dan nilai numerik (muka air untuk tabung ukur) per callout. */
 export type TwinCallout = { text: string; level: EwsLevel | "offline"; value?: number | null }
 /** Cuaca di atas penakar hujan: ok = cerah, warn = gerimis, alarm = deras. */
@@ -68,6 +88,24 @@ type SceneProps = {
   weather: Record<string, TwinWeather>
   monoFont: string
   onSelect: (assetId: string) => void
+  /** Level EWS tiap block (badge block di model). */
+  blockLevels?: Record<string, EwsLevel>
+  /** Klik wilayah / badge block. */
+  onSelectBlock?: (block: string) => void
+  /** Sector terpilih di block aktif (S1–S5). */
+  sector?: string | null
+  /** Jarak frame tampil dari live (hari; + = prakiraan). Dipakai pertumbuhan api simulasi. */
+  simDays?: number
+  /** Skenario memakai sekat kanal (pembasahan): sekat tampil di kanal, aliran melambat. */
+  canalBlocking?: boolean
+  /** Kabut asap 0–1 (meredupkan cahaya). */
+  haze?: number
+  /** Badai 0–1 (langit gelap). */
+  storm?: number
+  /** Sensor yang baru menerima sampel live (cincin berkedip); `nonce` berganti tiap sampel. */
+  ping?: { ids: string[]; nonce: number }
+  /** Klik sector di block aktif (id sama = batal). */
+  onSelectSector?: (id: string | null) => void
   /** Dipanggil tiap frame dengan azimut kamera (derajat) untuk jarum kompas. */
   onAzimuth?: (deg: number) => void
   /** Progres pemuatan tile citra satelit. */
@@ -198,6 +236,7 @@ export default function DigitalTwinScene(props: SceneProps) {
     select: (id: string | null) => void
     setAutoRotate: (on: boolean) => void
     setView: (view: TwinView) => void
+    ping: (ids: string[]) => void
   } | null>(null)
 
   useEffect(() => {
@@ -229,6 +268,25 @@ export default function DigitalTwinScene(props: SceneProps) {
     const zMax = project(lng0, minLat)[1]
     const canals = canalLines.map((line) => line.map(([lat, lng]) => project(lng, lat)))
     const assetsXZ = TWIN_ASSETS.map((a) => ({ asset: a, xz: project(a.lng, a.lat) }))
+    // Ring block di bidang x/z, berlawanan jarum jam (luas bertanda > 0) supaya normal kiri
+    // (−dz, dx) pita batas menghadap ke dalam block.
+    const zoneShapes = BLOCK_ZONES.map((zone) => {
+      let pts = zone.ring.map(([lng, lat]) => project(lng, lat))
+      let area2 = 0
+      for (let i = 0; i < pts.length; i += 1) {
+        const [ax, az] = pts[i]
+        const [bx, bz] = pts[(i + 1) % pts.length]
+        area2 += ax * bz - bx * az
+      }
+      if (area2 < 0) pts = [...pts].reverse()
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity
+      for (const [x, z] of pts) {
+        x0 = Math.min(x0, x); x1 = Math.max(x1, x)
+        z0 = Math.min(z0, z); z1 = Math.max(z1, z)
+      }
+      return { zone, pts, box: { x0, x1, z0, z1 } }
+    })
+    const zoneAtXZ = (x: number, z: number) => zoneShapes.find((s) => pointInRing(x, z, s.pts))?.zone.block ?? null
 
     // --- Renderer, kamera, kontrol -------------------------------------------
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" })
@@ -250,6 +308,11 @@ export default function DigitalTwinScene(props: SceneProps) {
     container.appendChild(labelRenderer.domElement)
 
     const scene = new THREE.Scene()
+    // Lampu hanya untuk model perangkat (MeshLambert); material lain MeshBasic/shader, tidak terpengaruh.
+    const hemi = new THREE.HemisphereLight("#eef7f2", "#24352c", 1.5)
+    const sun = new THREE.DirectionalLight("#fff4dc", 1.7)
+    sun.position.set(-40, 80, 30)
+    scene.add(hemi, sun)
     const bg = new THREE.Color(BG)
     scene.background = bg
 
@@ -659,6 +722,8 @@ export default function DigitalTwinScene(props: SceneProps) {
             block = asset.block
           }
         }
+        // Keanggotaan block (filter division) mengikuti wilayah block, bukan sensor terdekat.
+        block = zoneAtXZ(x, z) ?? block
         const sum = weights.reduce((a, b) => a + b, 0)
         pixels.push({
           idx: (j * DRAPE_W + i) * 4,
@@ -824,6 +889,183 @@ export default function DigitalTwinScene(props: SceneProps) {
       scene.add(mesh)
     }
 
+    // --- Block & sector ------------------------------------------------------------------
+    // Tiap block: isian tipis (juga target klik), garis batas warna block yang lebarnya hanya
+    // ke arah dalam (dua block bertetangga tampil sebagai dua garis sejajar, seperti peta
+    // cluster referensi), garis sector putus-putus, badge block, dan label S1–S5.
+    const makeZoneLineMat = (hex: string, width: number, core: boolean) =>
+      track(
+        new THREE.ShaderMaterial({
+          uniforms: { uPx: pxWorld, uWidth: { value: width }, uColor: { value: new THREE.Color(hex) }, uOpacity: { value: 1 } },
+          vertexShader: /* glsl */ `
+            attribute vec2 aDir;
+            attribute float aSide;
+            uniform float uPx, uWidth;
+            varying float vT;
+            void main() {
+              vec4 w = modelMatrix * vec4(position, 1.0);
+              float d = distance(cameraPosition, w.xyz);
+              vT = aSide * 0.5 + 0.5;
+              w.xz += vec2(-aDir.y, aDir.x) * vT * uWidth * uPx * d;
+              gl_Position = projectionMatrix * viewMatrix * w;
+            }`,
+          fragmentShader: core
+            ? /* glsl */ `
+              uniform vec3 uColor;
+              uniform float uOpacity;
+              varying float vT;
+              void main() { gl_FragColor = vec4(uColor, (1.0 - smoothstep(0.6, 1.0, vT)) * uOpacity); }`
+            : /* glsl */ `
+              uniform vec3 uColor;
+              uniform float uOpacity;
+              varying float vT;
+              void main() { gl_FragColor = vec4(uColor, exp(-vT * vT * 3.2) * uOpacity); }`,
+          transparent: true,
+          depthWrite: false,
+          blending: core ? THREE.NormalBlending : THREE.AdditiveBlending,
+        }),
+      )
+    const makeSectorMat = () => track(
+      new THREE.ShaderMaterial({
+        uniforms: { uPx: pxWorld, uWidth: { value: 1.6 }, uDash: { value: 0.9 }, uOpacity: { value: 0.6 } },
+        vertexShader: /* glsl */ `
+          attribute vec2 aDir;
+          attribute float aSide;
+          attribute float aAlong;
+          uniform float uPx, uWidth;
+          varying float vSide;
+          varying float vAlong;
+          void main() {
+            vec4 w = modelMatrix * vec4(position, 1.0);
+            float d = distance(cameraPosition, w.xyz);
+            w.xz += vec2(-aDir.y, aDir.x) * aSide * uWidth * 0.5 * uPx * d;
+            vSide = aSide;
+            vAlong = aAlong;
+            gl_Position = projectionMatrix * viewMatrix * w;
+          }`,
+        fragmentShader: /* glsl */ `
+          uniform float uDash, uOpacity;
+          varying float vSide;
+          varying float vAlong;
+          void main() {
+            float dash = step(fract(vAlong / uDash), 0.55);
+            gl_FragColor = vec4(vec3(1.0), dash * (1.0 - smoothstep(0.5, 1.0, abs(vSide))) * uOpacity);
+          }`,
+        transparent: true,
+        depthWrite: false,
+      }),
+    )
+    type ZoneObj = {
+      block: string
+      group: THREE.Group
+      fill: THREE.Mesh
+      fillMat: THREE.MeshBasicMaterial
+      coreMat: THREE.ShaderMaterial
+      glowMat: THREE.ShaderMaterial
+      sectors: THREE.Group
+      sectorLineMat: THREE.ShaderMaterial
+      sectorFills: { id: string; mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; color: string }[]
+      badge: CSS2DObject
+      badgeEl: HTMLDivElement
+      levelEl: HTMLSpanElement
+    }
+    const zoneObjs: ZoneObj[] = zoneShapes.map(({ zone, pts }) => {
+      const color = BLOCK_COLOR[zone.block] ?? "#6ee7b7"
+      const group = new THREE.Group()
+      scene.add(group)
+
+      const fillGeo = track(new THREE.ShapeGeometry(new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, -z)))))
+      fillGeo.rotateX(-Math.PI / 2)
+      const fillMat = track(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.05, depthWrite: false, toneMapped: false }))
+      const fill = new THREE.Mesh(fillGeo, fillMat)
+      fill.position.y = 0.036
+      fill.renderOrder = 1
+      fill.userData.block = zone.block
+      group.add(fill)
+
+      const lineBuf = newDashBuf()
+      pushDash(lineBuf, pts, true, [-9, -9], 0.055)
+      const lineGeo = dashGeometry(lineBuf)
+      const glowMat = makeZoneLineMat(color, 10, false)
+      const coreMat = makeZoneLineMat(color, 2.6, true)
+      for (const [m, order] of [
+        [glowMat, 5],
+        [coreMat, 6],
+      ] as const) {
+        const mesh = new THREE.Mesh(lineGeo, m)
+        mesh.renderOrder = order
+        mesh.frustumCulled = false
+        group.add(mesh)
+      }
+
+      // Garis sector selalu tampil tipis; isian berwarna level & label S1–S5 hanya di block
+      // terpilih atau saat kamera dekat.
+      const secBuf = newDashBuf()
+      for (const [a, b] of zone.sectorLines) pushDash(secBuf, [project(a[0], a[1]), project(b[0], b[1])], false, [-9, -9], 0.05)
+      const sectorLineMat = makeSectorMat()
+      const secMesh = new THREE.Mesh(dashGeometry(secBuf), sectorLineMat)
+      secMesh.renderOrder = 5
+      secMesh.frustumCulled = false
+      group.add(secMesh)
+      const sectors = new THREE.Group()
+      group.add(sectors)
+      const summaries = sectorSummaries(zone.block)
+      const sectorFills = zone.sectors.map((s) => {
+        const geo = track(new THREE.ShapeGeometry(new THREE.Shape(s.ring.map(([lng, lat]) => {
+          const [x, z] = project(lng, lat)
+          return new THREE.Vector2(x, -z)
+        }))))
+        geo.rotateX(-Math.PI / 2)
+        const level = summaries.find((x) => x.id === s.id)?.level ?? "normal"
+        const color = EWS_META[level].color
+        const mat = track(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.1, depthWrite: false, toneMapped: false }))
+        const mesh = new THREE.Mesh(geo, mat)
+        mesh.position.y = 0.04
+        mesh.renderOrder = 2
+        mesh.userData.block = zone.block
+        mesh.userData.sector = s.id
+        sectors.add(mesh)
+        return { id: s.id, mesh, mat, color }
+      })
+      for (const s of zone.sectors) {
+        const el = document.createElement("div")
+        el.className = "twin-sector"
+        el.textContent = s.id
+        const lbl = new CSS2DObject(el)
+        const [sx, sz] = project(s.label.lng, s.label.lat)
+        lbl.position.set(sx, 0.3, sz)
+        sectors.add(lbl)
+      }
+
+      const badgeEl = document.createElement("div")
+      badgeEl.className = "twin-zone"
+      badgeEl.style.setProperty("--bc", color)
+      badgeEl.style.fontFamily = propsRef.current.monoFont
+      const nameEl = document.createElement("b")
+      nameEl.textContent = zone.block
+      const levelEl = document.createElement("span")
+      levelEl.className = "twin-zone__lv"
+      const areaEl = document.createElement("small")
+      areaEl.textContent = `${zone.areaHa.toLocaleString("id-ID")} ha`
+      badgeEl.append(nameEl, levelEl, areaEl)
+      badgeEl.addEventListener("pointerdown", (e) => e.stopPropagation())
+      badgeEl.addEventListener("click", () => propsRef.current.onSelectBlock?.(zone.block))
+      const anchor = document.createElement("div")
+      anchor.className = "twin-label-anchor"
+      anchor.append(badgeEl)
+      const badge = new CSS2DObject(anchor)
+      const [lx, lz] = project(zone.label.lng, zone.label.lat)
+      badge.position.set(lx, 0.6, lz)
+      group.add(badge)
+
+      return { block: zone.block, group, fill, fillMat, coreMat, glowMat, sectors, sectorLineMat, sectorFills, badge, badgeEl, levelEl }
+    })
+    const zoneFills = zoneObjs.map((z) => z.fill)
+    const sectorMeshes = (block: string) => zoneObjs.find((z) => z.block === block)?.sectorFills.map((f) => f.mesh) ?? []
+    let hoveredZone: string | null = null
+    let hoveredSector: string | null = null
+    let lastZoneLevels = ""
+
     // --- Framing kamera awal ---------------------------------------------------------------
     // Jarak dicari (bagi dua) agar batas KHG pas di FIT_BOX, lalu titik orbit digeser
     // supaya kawasan berada di tengah area aman. Dihitung ulang tiap ukuran berubah.
@@ -976,11 +1218,67 @@ export default function DigitalTwinScene(props: SceneProps) {
     waterMesh.frustumCulled = false
     scene.add(waterMesh)
 
+    // --- Sekat kanal (skenario pembasahan): tanggul kecil melintang di parit drainase -------
+    // Ditempatkan tiap ±3 unit (~1,5 km) di sepanjang kanal lalu parit di dalam KHG (jarak antar
+    // sekat ≥ 2,6 unit), melintang parit; di hulunya (arah garis OSM = hilir) genangan biru air
+    // yang tertahan. Muncul bertahap (skala) saat skenario memakai sekat kanal.
+    const dams: { x: number; z: number; yaw: number; ux: number; uz: number }[] = []
+    const damLines = estateWaterways
+      .filter((w) => w.kind !== "river" && w.kind !== "stream")
+      .sort((a, b) => (a.kind === "canal" ? 0 : 1) - (b.kind === "canal" ? 0 : 1))
+    for (const w of damLines) {
+      const pts = w.coords.map(([lng, lat]) => project(lng, lat))
+      let acc = 1.5
+      for (let i = 1; i < pts.length && dams.length < 70; i += 1) {
+        const [ax, az] = pts[i - 1]
+        const [bx, bz] = pts[i]
+        const seg = Math.hypot(bx - ax, bz - az)
+        acc += seg
+        if (acc < 3 || seg < 1e-3) continue
+        const mx = (ax + bx) / 2
+        const mz = (az + bz) / 2
+        if (!pointInRing(mx, mz, ring)) continue
+        if (dams.some((d) => Math.hypot(d.x - mx, d.z - mz) < 2.6)) continue
+        dams.push({ x: mx, z: mz, yaw: Math.atan2(bx - ax, bz - az) + Math.PI / 2, ux: (ax - bx) / seg, uz: (az - bz) / seg })
+        acc = 0
+      }
+    }
+    const damCount = Math.max(1, dams.length)
+    const damMesh = track(new THREE.InstancedMesh(track(new THREE.BoxGeometry(1.5, 0.6, 0.42)), track(new THREE.MeshLambertMaterial({ color: "#8b6b4a" })), damCount))
+    const damCap = track(new THREE.InstancedMesh(track(new THREE.BoxGeometry(1.54, 0.07, 0.46)), track(new THREE.MeshBasicMaterial({ color: "#38bdf8" })), damCount))
+    const damPond = track(
+      new THREE.InstancedMesh(
+        track(new THREE.CircleGeometry(1, 28)),
+        track(new THREE.MeshBasicMaterial({ color: "#38bdf8", transparent: true, opacity: 0.42, depthWrite: false, side: THREE.DoubleSide })),
+        damCount,
+      ),
+    )
+    damPond.renderOrder = 4
+    scene.add(damMesh, damCap, damPond)
+    const pondQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    let damShown = 0
+    const damM = new THREE.Matrix4()
+    const damQ = new THREE.Quaternion()
+    const damP = new THREE.Vector3()
+    const damS = new THREE.Vector3()
+    const damAxis = new THREE.Vector3(0, 1, 0)
+    const placeDams = (k: number) => {
+      dams.forEach((d, i) => {
+        damQ.setFromAxisAngle(damAxis, d.yaw)
+        damMesh.setMatrixAt(i, damM.compose(damP.set(d.x, 0.3 * k, d.z), damQ, damS.set(k, k, k)))
+        damCap.setMatrixAt(i, damM.compose(damP.set(d.x, 0.62 * k, d.z), damQ, damS.set(k, k, k)))
+        damPond.setMatrixAt(i, damM.compose(damP.set(d.x + d.ux * 1.1, 0.065, d.z + d.uz * 1.1), pondQ, damS.set(1.1 * k, 0.75 * k, 1)))
+      })
+      damMesh.instanceMatrix.needsUpdate = true
+      damCap.instanceMatrix.needsUpdate = true
+      damPond.instanceMatrix.needsUpdate = true
+      damMesh.visible = damCap.visible = damPond.visible = k > 0.01
+    }
+    placeDams(0)
+
     // --- Sensor: halo riak, cincin status, badan per jenis, callout ------------------
     const haloGeo = track(new THREE.CircleGeometry(1.6, 48))
     const ringGeo = track(new THREE.RingGeometry(0.55, 0.7, 48))
-    const beamGeo = track(new THREE.CylinderGeometry(0.06, 0.06, 1, 10, 1, true))
-    const headGeo = track(new THREE.SphereGeometry(0.3, 20, 14))
     const pickGeo = track(new THREE.CylinderGeometry(0.9, 0.9, 1, 8))
     const offRingGeo = track(new THREE.RingGeometry(1.15, 1.4, 48))
     const offBeaconGeo = track(new THREE.OctahedronGeometry(0.26))
@@ -1009,23 +1307,6 @@ export default function DigitalTwinScene(props: SceneProps) {
           blending: THREE.AdditiveBlending,
         }),
       )
-    const makeBeamMat = (hex: string) =>
-      track(
-        new THREE.ShaderMaterial({
-          uniforms: { uColor: { value: new THREE.Color(hex) } },
-          vertexShader: /* glsl */ `
-            varying float vY;
-            void main() { vY = position.y + 0.5; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-          fragmentShader: /* glsl */ `
-            uniform vec3 uColor;
-            varying float vY;
-            void main() { gl_FragColor = vec4(uColor, 0.25 + 0.75 * (1.0 - vY)); }`,
-          transparent: true,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
-      )
-
     type NodeType = TwinAsset["layer"]
     type SensorNode = {
       id: string
@@ -1054,9 +1335,27 @@ export default function DigitalTwinScene(props: SceneProps) {
       offRing: THREE.Mesh
       offRingMat: THREE.MeshBasicMaterial
       offBeaconMat: THREE.MeshBasicMaterial
+      halo: THREE.Mesh
+      /** Daun pintu air (naik sesuai bukaan) & posisi tujuannya. */
+      gateLeaf?: THREE.Mesh
+      gateY: number
     }
     const nodes: SensorNode[] = []
     const pickables: THREE.Object3D[] = []
+
+    // Model perangkat per jenis (lihat [[twin-devices]]): dibuat sekali, dipakai aset twin & stasiun lain.
+    const deviceMat = track(new THREE.MeshLambertMaterial({ vertexColors: true, color: "#d8d8d8" }))
+    const deviceCache = new Map<NodeType, DeviceModel | null>()
+    const deviceOf = (type: NodeType) => {
+      if (!deviceCache.has(type)) {
+        const d = buildDevice(type, ASSET_TYPE_META[type].color)
+        if (d) track(d.geometry)
+        deviceCache.set(type, d)
+      }
+      return deviceCache.get(type) ?? null
+    }
+    const GATE_CLOSED_Y = 0.79
+    const GATE_LIFT = 1.0
 
     const makeNode = (id: string, code: string, type: NodeType, block: string | null, x: number, z: number) => {
       const color = ASSET_TYPE_META[type].color
@@ -1076,14 +1375,17 @@ export default function DigitalTwinScene(props: SceneProps) {
       group.add(ring)
 
       const headMat = track(new THREE.MeshBasicMaterial({ color }))
-      let top = type === "rain-gauge" ? 4.4 : type === "fire-hotspot" ? 2.6 : 3.1
+      const device = deviceOf(type)
+      if (device) group.add(new THREE.Mesh(device.geometry, deviceMat))
+      let top = device?.top ?? 3.1
       let fill: THREE.Mesh | undefined
       let fillMat: THREE.MeshBasicMaterial | undefined
       let spin: THREE.Object3D | undefined
+      let gateLeaf: THREE.Mesh | undefined
 
       if (type === "borehole" || type === "water-station") {
-        // Tabung ukur: atas = permukaan gambut, isi = kolom air tanah.
-        top = GAUGE_H + 0.35
+        // Tabung ukur: atas = permukaan gambut, isi = kolom air tanah (di samping tiang stasiun).
+        top = Math.max(top, GAUGE_H + 0.35)
         const tube = new THREE.Mesh(
           track(new THREE.CylinderGeometry(0.42, 0.42, GAUGE_H, 20, 1, true)),
           track(new THREE.MeshBasicMaterial({ color: "#a7f3d0", transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })),
@@ -1107,19 +1409,67 @@ export default function DigitalTwinScene(props: SceneProps) {
         fill = new THREE.Mesh(track(new THREE.CylinderGeometry(0.34, 0.34, 1, 20)), fillMat)
         fill.scale.y = 0.01
         group.add(fill)
-      } else {
-        const beam = new THREE.Mesh(beamGeo, makeBeamMat(color))
-        beam.scale.y = top
-        beam.position.y = top / 2
-        group.add(beam)
-        let head: THREE.Mesh
-        if (type === "peat-station") head = new THREE.Mesh(track(new THREE.OctahedronGeometry(0.42)), headMat)
-        else if (type === "water-gate") head = new THREE.Mesh(track(new THREE.BoxGeometry(0.7, 0.5, 0.35)), headMat)
-        else if (type === "fire-hotspot") head = new THREE.Mesh(track(new THREE.ConeGeometry(0.38, 0.9, 14)), headMat)
-        else head = new THREE.Mesh(headGeo, headMat)
-        head.position.y = top
+      } else if (type === "water-gate") {
+        // Daun pintu di antara pilar; naik-turun mengikuti bukaan (lihat refreshCallouts).
+        gateLeaf = new THREE.Mesh(track(new THREE.BoxGeometry(1.2, 1.3, 0.1)), deviceMat)
+        gateLeaf.geometry.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(new Array(gateLeaf.geometry.attributes.position.count).fill(0).flatMap(() => new THREE.Color(color).toArray()), 3),
+        )
+        gateLeaf.position.y = GATE_CLOSED_Y
+        group.add(gateLeaf)
+      } else if (type === "gateway") {
+        // Cincin sinyal di bawah antena, berputar pelan.
+        const head = new THREE.Group()
+        head.position.y = 7.3
+        for (const [r, y] of [
+          [0.55, 0],
+          [0.85, -0.35],
+        ] as const) {
+          const wave = new THREE.Mesh(
+            track(new THREE.TorusGeometry(r, 0.025, 6, 32)),
+            track(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6 })),
+          )
+          wave.rotation.x = Math.PI / 2
+          wave.position.y = y
+          head.add(wave)
+        }
         group.add(head)
-        if (type !== "rain-gauge") spin = head
+        spin = head
+      } else if (type === "aws") {
+        // Tiga mangkuk anemometer berputar di puncak tiang.
+        const head = new THREE.Group()
+        head.position.y = 4.33
+        const cupGeo = track(new THREE.SphereGeometry(0.15, 12, 8))
+        const armGeo = track(new THREE.BoxGeometry(0.56, 0.04, 0.04))
+        for (let k = 0; k < 3; k += 1) {
+          const a = (k / 3) * Math.PI * 2
+          const arm = new THREE.Mesh(armGeo, headMat)
+          arm.position.set(Math.cos(a) * 0.28, 0, Math.sin(a) * 0.28)
+          arm.rotation.y = -a
+          head.add(arm)
+          const cup = new THREE.Mesh(cupGeo, headMat)
+          cup.position.set(Math.cos(a) * 0.56, 0, Math.sin(a) * 0.56)
+          head.add(cup)
+        }
+        group.add(head)
+        spin = head
+      } else if (type === "cctv") {
+        // Badan kamera di puncak tiang, menyapu pelan.
+        const head = new THREE.Group()
+        head.position.y = 3.0
+        const body = new THREE.Mesh(track(new THREE.BoxGeometry(0.62, 0.26, 0.28)), track(new THREE.MeshLambertMaterial({ color: "#e5e7eb" })))
+        body.position.x = 0.22
+        head.add(body)
+        const hood = new THREE.Mesh(track(new THREE.BoxGeometry(0.7, 0.04, 0.34)), headMat)
+        hood.position.set(0.24, 0.16, 0)
+        head.add(hood)
+        const lens = new THREE.Mesh(track(new THREE.CylinderGeometry(0.09, 0.09, 0.1, 12)), track(new THREE.MeshBasicMaterial({ color: "#0b1220" })))
+        lens.rotation.z = Math.PI / 2
+        lens.position.x = 0.56
+        head.add(lens)
+        group.add(head)
+        spin = head
       }
 
       // Penanda offline: cincin tanah berkedip + lampu suar di atas sensor (tersembunyi bila online).
@@ -1147,13 +1497,16 @@ export default function DigitalTwinScene(props: SceneProps) {
       root.className = "twin-label"
       root.style.setProperty("--c", color)
       root.style.fontFamily = propsRef.current.monoFont
+      const icon = document.createElement("span")
+      icon.className = "twin-label__ic"
+      icon.innerHTML = sensorSvg(type, 12)
       const dot = document.createElement("span")
       dot.className = "twin-label__dot"
       const codeEl = document.createElement("b")
       codeEl.textContent = code
       const valueEl = document.createElement("span")
       valueEl.className = "twin-label__v"
-      root.append(dot, codeEl, valueEl)
+      root.append(icon, dot, codeEl, valueEl)
       root.addEventListener("pointerdown", (e) => e.stopPropagation())
       root.addEventListener("click", () => propsRef.current.onSelect(id))
       // CSS2DRenderer memegang transform wadah; pil di dalamnya bebas digeser (--dy).
@@ -1168,11 +1521,70 @@ export default function DigitalTwinScene(props: SceneProps) {
       const node: SensorNode = {
         id, type, block, x, z, group, top, ring, ringMat, haloMat, fill, fillMat, spin, label, root, valueEl,
         level: "normal", dy: 0, hidden: false, flash: 0, offMark, offRing, offRingMat, offBeaconMat,
+        gateLeaf, gateY: GATE_CLOSED_Y, halo,
       }
       nodes.push(node)
       return node
     }
     for (const { asset, xz } of assetsXZ) makeNode(asset.id, asset.code, asset.layer, asset.block, xz[0], xz[1])
+
+    // --- Stasiun lain di registri: model mini perangkat (instanced per jenis) + cincin level ----
+    // Satu InstancedMesh per jenis supaya ratusan stasiun tetap ringan; filter division = skala 0.
+    const FLEET_SCALE = 0.6
+    const fleetStations = STATIONS.filter((s) => !s.twinId).map((s) => ({
+      s,
+      xz: project(s.lng, s.lat),
+      // Arah hadap stabil per kode supaya tidak semua perangkat seragam.
+      yaw: ([...s.code].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 997, 7) / 997) * Math.PI * 2,
+    }))
+    const fleetGroup = new THREE.Group()
+    scene.add(fleetGroup)
+    const fleetTypes = [...new Set(fleetStations.map((f) => f.s.type))]
+    const fleetMeshes = fleetTypes.flatMap((type) => {
+      const device = deviceOf(type)
+      const members = fleetStations.filter((f) => f.s.type === type)
+      if (!device) return []
+      const mesh = track(new THREE.InstancedMesh(device.geometry, deviceMat, members.length))
+      fleetGroup.add(mesh)
+      return [{ mesh, members }]
+    })
+    const fleetRings = track(
+      new THREE.InstancedMesh(
+        track(new THREE.RingGeometry(0.42, 0.56, 28)),
+        track(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false })),
+        fleetStations.length,
+      ),
+    )
+    fleetGroup.add(fleetRings)
+    {
+      const c = new THREE.Color()
+      fleetStations.forEach(({ s }, i) => fleetRings.setColorAt(i, c.set(STATUS_HEX[s.level])))
+    }
+    const fleetM = new THREE.Matrix4()
+    const fleetQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    const fleetYaw = new THREE.Quaternion()
+    const fleetP = new THREE.Vector3()
+    const fleetS = new THREE.Vector3()
+    const yAxis = new THREE.Vector3(0, 1, 0)
+    let fleetDivision: string | null = null
+    const placeFleet = (division: string) => {
+      if (division === fleetDivision) return
+      fleetDivision = division
+      for (const { mesh, members } of fleetMeshes) {
+        members.forEach(({ s, xz: [x, z], yaw }, i) => {
+          const k = matchesBlock(s.block, division) ? FLEET_SCALE : 0
+          mesh.setMatrixAt(i, fleetM.compose(fleetP.set(x, 0, z), fleetYaw.setFromAxisAngle(yAxis, yaw), fleetS.set(k, k, k)))
+        })
+        mesh.instanceMatrix.needsUpdate = true
+        mesh.computeBoundingSphere()
+      }
+      fleetStations.forEach(({ s, xz: [x, z] }, i) => {
+        const k = matchesBlock(s.block, division) ? 1 : 0
+        fleetRings.setMatrixAt(i, fleetM.compose(fleetP.set(x, 0.07, z), fleetQ, fleetS.set(k, k, k)))
+      })
+      fleetRings.instanceMatrix.needsUpdate = true
+      fleetRings.computeBoundingSphere()
+    }
 
     // --- Link data: lompatan antar sensor sepanjang kanal -----------------------------------
     // Tiap kanal = rantai relay: data melompat dari satu sensor ke sensor berikutnya lewat
@@ -1438,10 +1850,11 @@ export default function DigitalTwinScene(props: SceneProps) {
     const rainCells: RainCell[] = []
     const rainScale = { value: 1000 }
     const splashSquash = { value: 0.6 }
-    for (const { asset, xz } of assetsXZ.filter((a) => a.asset.layer === "rain-gauge")) {
-      const [px, pz] = xz
+    // Satu sel hujan per penakar di registri (twin & non-twin), dikunci kode stasiun.
+    for (const st of STATIONS.filter((x) => x.type === "rain-gauge")) {
+      const [px, pz] = project(st.lng, st.lat)
       const R = 10
-      const start = WEATHER[propsRef.current.weather?.[asset.id] ?? "ok"]
+      const start = WEATHER[propsRef.current.weather?.[st.code] ?? "ok"]
       const u = {
         uTime: { value: 0 },
         uFall: { value: 0 },
@@ -1454,7 +1867,7 @@ export default function DigitalTwinScene(props: SceneProps) {
         uDark: { value: start.dark },
         uFlash: { value: 0 },
       }
-      const N = 2600
+      const N = 2000
       const pos = new Float32Array(N * 2 * 3)
       const endAttr = new Float32Array(N * 2)
       const rnd = new Float32Array(N * 2)
@@ -1603,7 +2016,7 @@ export default function DigitalTwinScene(props: SceneProps) {
       scene.add(bolt)
 
       rainCells.push({
-        id: asset.id, cx: px, cz: pz, radius: R, cur: { ...start }, u, boltPos, boltMat,
+        id: st.code, cx: px, cz: pz, radius: R, cur: { ...start }, u, boltPos, boltMat,
         nextFlash: 2 + Math.random() * 3, objects: [drops, splashes, cloud, bolt],
       })
     }
@@ -1621,6 +2034,231 @@ export default function DigitalTwinScene(props: SceneProps) {
       r.boltPos.needsUpdate = true
       r.u.uFlash.value = 1
     }
+    // --- Kebakaran: api, asap tertiup angin, bekas terbakar & bara -----------------------
+    // Sumber api: (1) hotspot twin — intensitas dari level & FRP callout pada frame tampil;
+    // (2) hotspot registri yang sudah padam — menyala lagi hanya di frame simulasi bila risiko
+    // api block ekstrem (≥ 85); (3) titik sebaran searah angin — muncul bertahap saat api
+    // induknya membesar (skenario kemarau / kebakaran). Hujan menurunkan risiko → api padam.
+    // Ukuran dunia: 1 unit ≈ 0,5 km.
+    type FireUniforms = { uTime: { value: number }; uI: { value: number }; uR: { value: number } }
+    type FireCell = {
+      /** Id aset twin (sumber "twin") atau kode stasiun. */
+      id: string
+      block: string
+      source: "twin" | "risk" | "spread"
+      parent?: FireCell
+      /** Ambang intensitas induk agar titik sebaran mulai menyala. */
+      th: number
+      group: THREE.Group
+      cur: number
+      vis: boolean
+      u: FireUniforms
+    }
+    const fireCells: FireCell[] = []
+    const SMOKE_WIND = new THREE.Vector2(0.55, -0.32)
+    const makeFire = (px: number, pz: number): { group: THREE.Group; u: FireUniforms } => {
+      const group = new THREE.Group()
+      group.position.set(px, 0, pz)
+      scene.add(group)
+      const u = { uTime: { value: 0 }, uI: { value: 0 }, uR: { value: 1 } }
+      const rndGeo = (n: number) => {
+        const g = track(new THREE.BufferGeometry())
+        const pos = new Float32Array(n * 3)
+        const rnd = new Float32Array(n * 3)
+        for (let i = 0; i < n * 3; i += 1) rnd[i] = Math.random()
+        g.setAttribute("position", new THREE.BufferAttribute(pos, 3))
+        g.setAttribute("aRnd", new THREE.BufferAttribute(rnd, 3))
+        return g
+      }
+
+      // Bekas terbakar + cincin bara di tepi (piringan di tanah).
+      const scar = new THREE.Mesh(
+        track(new THREE.CircleGeometry(1, 64)),
+        track(
+          new THREE.ShaderMaterial({
+            uniforms: u,
+            vertexShader: /* glsl */ `
+              varying vec2 vP;
+              void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: /* glsl */ `
+              uniform float uTime, uI;
+              varying vec2 vP;
+              ${NOISE_GLSL}
+              void main() {
+                float n = noise(vP * 3.5 + 7.0) * 0.6 + noise(vP * 9.0 - uTime * 0.6) * 0.4;
+                float d = length(vP) + (n - 0.5) * 0.28;
+                float scarA = smoothstep(1.0, 0.55, d) * 0.62;
+                float rim = smoothstep(0.62, 0.86, d) * smoothstep(1.04, 0.86, d);
+                float flick = 0.65 + 0.35 * noise(vP * 6.0 + uTime * 2.4);
+                vec3 c = mix(vec3(0.07, 0.05, 0.04), vec3(1.0, 0.42, 0.08), rim * flick);
+                gl_FragColor = vec4(c, max(scarA * (1.0 - rim), rim * flick) * uI);
+              }`,
+            transparent: true,
+            depthWrite: false,
+          }),
+        ),
+      )
+      scar.rotation.x = -Math.PI / 2
+      scar.position.y = 0.06
+      scar.renderOrder = 3
+      group.add(scar)
+
+      // Api: partikel naik & menyempit, warna putih-kuning → oranye → merah.
+      const flameMat = track(
+        new THREE.ShaderMaterial({
+          uniforms: { ...u, uScale: rainScale },
+          vertexShader: /* glsl */ `
+            attribute vec3 aRnd;
+            uniform float uTime, uI, uR, uScale;
+            varying float vT;
+            varying float vA;
+            void main() {
+              float t = fract(uTime * (0.9 + aRnd.x * 0.7) + aRnd.x * 7.0);
+              float ang = aRnd.y * 6.2831;
+              float r = sqrt(aRnd.z) * uR * 0.8 * (1.0 - 0.7 * t);
+              vec3 p = vec3(cos(ang) * r, t * (0.9 + 2.6 * uI) * (0.55 + 0.45 * aRnd.z), sin(ang) * r);
+              p.x += sin(uTime * 4.0 + aRnd.x * 20.0) * 0.14 * t;
+              vT = t;
+              vA = uI * step(aRnd.y, 0.3 + 0.7 * min(uI, 1.0));
+              vec4 mv = modelViewMatrix * vec4(p, 1.0);
+              gl_PointSize = uScale * (0.5 - 0.32 * t) * (0.55 + 0.6 * uI) / -mv.z;
+              gl_Position = projectionMatrix * mv;
+            }`,
+          fragmentShader: /* glsl */ `
+            varying float vT;
+            varying float vA;
+            void main() {
+              float d = length(gl_PointCoord - 0.5) * 2.0;
+              float a = smoothstep(1.0, 0.0, d);
+              vec3 c = mix(vec3(1.0, 0.95, 0.72), vec3(1.0, 0.5, 0.1), smoothstep(0.0, 0.4, vT));
+              c = mix(c, vec3(0.75, 0.12, 0.03), smoothstep(0.45, 1.0, vT));
+              float alpha = a * a * (1.0 - vT) * vA;
+              if (alpha < 0.01) discard;
+              gl_FragColor = vec4(c, alpha);
+            }`,
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      )
+      const flames = new THREE.Points(rndGeo(320), flameMat)
+      flames.frustumCulled = false
+      flames.renderOrder = 9
+      group.add(flames)
+
+      // Asap: gumpalan lembut naik tinggi, membesar, terbawa angin ke timur laut.
+      const smokeMat = track(
+        new THREE.ShaderMaterial({
+          uniforms: { ...u, uScale: rainScale, uWind: { value: SMOKE_WIND } },
+          vertexShader: /* glsl */ `
+            attribute vec3 aRnd;
+            uniform float uTime, uI, uR, uScale;
+            uniform vec2 uWind;
+            varying float vT;
+            varying float vA;
+            varying float vSeed;
+            void main() {
+              float t = fract(uTime * 0.07 * (0.75 + aRnd.x * 0.5) + aRnd.x * 5.0);
+              float ang = aRnd.y * 6.2831;
+              float r = sqrt(aRnd.z) * uR * (0.45 + 1.1 * t);
+              vec3 p = vec3(cos(ang) * r, 0.8 + t * (5.0 + 7.0 * uI), sin(ang) * r);
+              p.xz += uWind * t * t * (6.0 + 8.0 * uI);
+              vT = t;
+              vSeed = aRnd.y;
+              vA = uI;
+              vec4 mv = modelViewMatrix * vec4(p, 1.0);
+              gl_PointSize = uScale * (0.9 + 3.6 * t) * (0.6 + 0.5 * uI) / -mv.z;
+              gl_Position = projectionMatrix * mv;
+            }`,
+          fragmentShader: /* glsl */ `
+            varying float vT;
+            varying float vA;
+            varying float vSeed;
+            ${NOISE_GLSL}
+            void main() {
+              vec2 q = gl_PointCoord - 0.5;
+              float d = length(q) * 2.0;
+              float n = noise(q * 5.0 + vSeed * 40.0);
+              float blob = smoothstep(1.0, 0.2, d + (n - 0.5) * 0.5);
+              vec3 c = mix(vec3(0.62, 0.32, 0.14), vec3(0.24, 0.23, 0.24), smoothstep(0.0, 0.22, vT));
+              c = mix(c, vec3(0.42, 0.42, 0.44), smoothstep(0.5, 1.0, vT));
+              float alpha = blob * smoothstep(0.0, 0.1, vT) * (1.0 - vT) * 0.5 * min(vA, 1.0);
+              if (alpha < 0.01) discard;
+              gl_FragColor = vec4(c, alpha);
+            }`,
+          transparent: true,
+          depthWrite: false,
+        }),
+      )
+      const smoke = new THREE.Points(rndGeo(200), smokeMat)
+      smoke.frustumCulled = false
+      smoke.renderOrder = 8
+      group.add(smoke)
+
+      return { group, u }
+    }
+    {
+      const wind = SMOKE_WIND.clone().normalize()
+      // Titik sebaran: jarak (unit), sudut relatif arah angin, ambang intensitas induk.
+      // Ambang di atas intensitas live terbesar (1,15) → sebaran hanya muncul saat api tumbuh.
+      const SPREAD: [number, number, number][] = [
+        [1.7, 0, FIRE_SPREAD_THRESHOLDS[0]],
+        [2.3, 0.8, FIRE_SPREAD_THRESHOLDS[1]],
+        [2.1, -0.75, FIRE_SPREAD_THRESHOLDS[2]],
+      ]
+      const addFire = (id: string, block: string, source: FireCell["source"], x: number, z: number, parent?: FireCell, th = 0) => {
+        const { group, u } = makeFire(x, z)
+        const cell: FireCell = { id, block, source, parent, th, group, cur: 0, vis: true, u }
+        fireCells.push(cell)
+        return cell
+      }
+      const withSpread = (root: FireCell, x: number, z: number, n: number) => {
+        for (const [d, a, th] of SPREAD.slice(0, n)) {
+          const c = Math.cos(a)
+          const s2 = Math.sin(a)
+          addFire(root.id, root.block, "spread", x + (wind.x * c - wind.y * s2) * d, z + (wind.x * s2 + wind.y * c) * d, root, th)
+        }
+      }
+      for (const { asset, xz } of assetsXZ.filter((a) => a.asset.layer === "fire-hotspot")) {
+        withSpread(addFire(asset.id, asset.block, "twin", xz[0], xz[1]), xz[0], xz[1], 3)
+      }
+      // Hotspot lama yang sudah padam (bukan positif palsu) bisa menyala lagi saat kemarau ekstrem.
+      for (const st of STATIONS.filter((x) => x.type === "fire-hotspot" && !x.twinId && !/palsu/i.test(x.note ?? ""))) {
+        const [x, z] = project(st.lng, st.lat)
+        withSpread(addFire(st.code, st.block, "risk", x, z), x, z, 2)
+      }
+    }
+    const stepFire = (t: number, dt: number) => {
+      const { callouts, frame, simDays = 0, canalBlocking = false } = propsRef.current
+      const ease = 1 - Math.exp(-dt * 1.6)
+      // Prakiraan: tumbuh tiap hari kering, diredam hujan & pembasahan (lihat fireGrowth).
+      const growth = fireGrowth(frame, simDays, canalBlocking)
+      for (const f of fireCells) {
+        let target = 0
+        let frp = 0
+        if (f.source === "twin") {
+          const c = callouts[f.id]
+          frp = typeof c?.value === "number" ? c.value : 0
+          target = c ? fireIntensity(c.level, frp) * growth : 0
+        } else if (f.source === "risk") {
+          // Hotspot lama menyala lagi hanya di prakiraan tanpa hujan dengan risiko api ekstrem.
+          target = reigniteIntensity(frame, simDays, frame.blocks[f.block]?.fireRisk ?? 0) * (canalBlocking ? growth : 1)
+          frp = 4 + 10 * target
+        } else if (f.parent) {
+          target = clamp((f.parent.cur - f.th) / 0.2, 0, 1) * Math.min(f.parent.cur, 1.2)
+          frp = 3 + 8 * target
+        }
+        f.cur += (target - f.cur) * ease
+        f.group.visible = f.vis && f.cur > 0.005
+        if (!f.group.visible) continue
+        f.u.uTime.value = t + f.th * 3.7
+        f.u.uI.value = Math.min(f.cur, 1.4)
+        // Radius bekas terbakar dari FRP (m → unit dunia ≈ 500 m).
+        f.u.uR.value = (burnRadiusM(frp) / 500) * (0.6 + 0.4 * Math.min(1, f.cur))
+        f.group.children[0].scale.setScalar(f.u.uR.value)
+      }
+    }
+
     // Kualitas adaptif (0 = penuh): FPS rendah → resolusi & kepadatan hujan diturunkan.
     let quality = 0
     const RAIN_Q = [1, 0.6, 0.35]
@@ -1678,7 +2316,10 @@ export default function DigitalTwinScene(props: SceneProps) {
       const { layer, overlays, division } = propsRef.current
       const img = drapeImage.data
       img.fill(0)
-      const drawFactor = st.gate / LIVE_GATE_OPENING
+      const { canalBlocking: blocked = false, frame: drapeFrame } = propsRef.current
+      const simulating = drapeFrame.kind === "forecast"
+      // Sekat kanal: air tertahan di parit → gambut di dekat kanal justru lebih basah.
+      const drawFactor = blocked && simulating ? -0.45 : st.gate / LIVE_GATE_OPENING
       if (overlays.theme || overlays.zones) {
         for (const p of pixels) {
           let wt = 0, moist = 0, ndvi = 0, peat = 0
@@ -1699,7 +2340,8 @@ export default function DigitalTwinScene(props: SceneProps) {
               : layer === "peatDepth" ? peat + p.noise * 12
               : localWt
             rgb = rampColor(layer, value)
-            alpha = 0.7
+            // Saat simulasi tema dibuat lebih transparan supaya api, asap & genangan terbaca.
+            alpha = simulating ? 0.48 : 0.7
           } else if (localWt < WT_COMPLIANCE) {
             rgb = [1, 0.48, 0.4]
             alpha = 0.05 + 0.28 * clamp((WT_COMPLIANCE - localWt) / 25, 0, 1)
@@ -1721,7 +2363,30 @@ export default function DigitalTwinScene(props: SceneProps) {
     }
 
     // --- Sinkronisasi state dari props ------------------------------------------------
+    // Perangkat pendukung (jaringan, kamera, cuaca, subsidence) disembunyikan saat overview,
+    // kecuali sedang alarm, terpilih, atau relevan dengan mode (ada di labelIds).
+    const SECONDARY = new Set<NodeType>(["gateway", "repeater", "cctv", "aws", "subsidence"])
+    const overviewNow = () => !sectorsNear && !zoneObjs.some((z) => z.block === propsRef.current.division)
+    const refreshNodes = () => {
+      const { division, labelIds, callouts, selectedId } = propsRef.current
+      const overview = overviewNow()
+      const modeFiltered = labelIds != null && labelIds.length < nodes.length
+      for (const n of nodes) {
+        const inScope = n.block == null || matchesBlock(n.block, division)
+        const lv = callouts[n.id]?.level
+        const show =
+          !overview ||
+          !SECONDARY.has(n.type) ||
+          n.id === selectedId ||
+          lv === "awas" ||
+          lv === "offline" ||
+          (modeFiltered && labelIds.includes(n.id))
+        n.group.visible = inScope && show
+      }
+    }
+
     const refreshCallouts = () => {
+      refreshNodes()
       const { callouts, selectedId, overlays, labelIds } = propsRef.current
       for (const n of nodes) {
         const c = callouts[n.id] ?? { text: "—", level: "normal" as const }
@@ -1729,7 +2394,11 @@ export default function DigitalTwinScene(props: SceneProps) {
         n.root.className = ["twin-label", levelClass(c.level), n.id === selectedId ? "is-selected" : "", n.hidden ? "is-hidden" : ""]
           .filter(Boolean)
           .join(" ")
-        n.label.visible = (overlays.labels && (!labelIds || labelIds.includes(n.id))) || n.id === selectedId
+        // Overview (tanpa block terpilih, kamera jauh): hanya callout Awas / offline supaya lega.
+        const urgent = c.level === "awas" || c.level === "offline"
+        n.label.visible = (overlays.labels && (!labelIds || labelIds.includes(n.id)) && (!overviewNow() || urgent)) || n.id === selectedId
+        // Halo riak hanya untuk node yang perlu perhatian (atau terpilih).
+        n.halo.visible = c.level !== "normal" || n.id === selectedId
         if (c.level !== n.level) {
           n.level = c.level
           const hex = STATUS_HEX[c.level]
@@ -1738,6 +2407,11 @@ export default function DigitalTwinScene(props: SceneProps) {
           n.haloMat.uniforms.uAlarm.value = c.level === "awas" || c.level === "offline" ? 1 : 0
           n.fillMat?.color.set(hex)
           n.offMark.visible = c.level === "offline"
+        }
+        if (n.gateLeaf) {
+          // Bukaan %; pintu offline memakai bukaan terakhir yang diketahui (60%).
+          const opening = typeof c.value === "number" ? c.value : 60
+          n.gateY = GATE_CLOSED_Y + clamp(opening / 100, 0, 1) * GATE_LIFT
         }
         if (n.fill) {
           const wt = typeof c.value === "number" ? c.value : -GAUGE_RANGE
@@ -1748,7 +2422,48 @@ export default function DigitalTwinScene(props: SceneProps) {
       }
     }
 
+    // Block: sorot block terpilih, redupkan sisanya; isian naik sedikit saat di-hover.
+    // Garis & label sector tampil di block terpilih, atau semua block saat kamera dekat.
+    let sectorsNear = false
+    const refreshZones = () => {
+      const { overlays, division, blockLevels, sector } = propsRef.current
+      const anyActive = zoneObjs.some((z) => z.block === division)
+      for (const z of zoneObjs) {
+        const active = z.block === division
+        const dim = anyActive && !active
+        z.group.visible = overlays.blocks
+        // Block aktif: isian block diganti isian sector berwarna level.
+        z.fillMat.opacity = (active ? 0 : dim ? 0 : 0.025) + (z.block === hoveredZone && !active ? 0.06 : 0)
+        z.coreMat.uniforms.uOpacity.value = dim ? 0.35 : 0.95
+        z.glowMat.uniforms.uOpacity.value = active ? 0.85 : dim ? 0.12 : 0.45
+        z.sectorLineMat.uniforms.uOpacity.value = active ? 0.75 : dim ? 0.12 : sectorsNear ? 0.55 : 0.32
+        z.sectors.visible = active || (!anyActive && sectorsNear)
+        for (const f of z.sectorFills) {
+          const on = active && f.id === sector
+          const hover = active && f.id === hoveredSector
+          f.mat.opacity = active ? (on ? 0.3 : 0.12) + (hover ? 0.06 : 0) : 0.05
+          f.mat.color.set(on ? "#ffffff" : f.color)
+          f.mesh.visible = active || sectorsNear
+        }
+        z.badgeEl.classList.toggle("is-active", active)
+        z.badgeEl.classList.toggle("is-dim", dim)
+      }
+      // Pin stasiun lain hanya saat block dipilih atau kamera dekat (overview tetap lega).
+      fleetGroup.visible = overlays.fleet && (anyActive || sectorsNear)
+      const levelsKey = JSON.stringify(blockLevels ?? {})
+      if (levelsKey !== lastZoneLevels) {
+        lastZoneLevels = levelsKey
+        for (const z of zoneObjs) {
+          const level = blockLevels?.[z.block]
+          z.levelEl.textContent = level ? EWS_META[level].label : ""
+          z.levelEl.style.setProperty("--lv", level ? EWS_META[level].color : "transparent")
+          z.levelEl.hidden = !level
+        }
+      }
+    }
+
     const refreshState = () => {
+      refreshZones()
       const { frame, overlays, night, division } = propsRef.current
       const next = shownOf(frame)
       if (JSON.stringify(next) !== JSON.stringify(tweenTo)) {
@@ -1758,14 +2473,20 @@ export default function DigitalTwinScene(props: SceneProps) {
       }
       groundUniforms.uImagery.value = overlays.imagery ? 1 : 0
       groundUniforms.uNatural.value = night ? 0 : 1
+      const { haze = 0, storm = 0 } = propsRef.current
+      const dim = (1 - 0.45 * haze) * (1 - 0.4 * storm)
+      hemi.intensity = (night ? 0.55 : 1.5) * dim
+      sun.intensity = (night ? 0.35 : 1.7) * dim
+      hemi.color.set(haze > 0.05 ? "#e8d9c4" : "#eef7f2")
       curtainMat.uniforms.uGain.value = night ? 1.25 : 1
       // Dengan bloom, pita cahaya diredam supaya garis batas tidak terlalu silau.
       glowWide.uniforms.uOpacity.value = (night ? 0.42 : 0.3) * (overlays.bloom ? 0.55 : 1)
       glowNear.uniforms.uOpacity.value = (night ? 0.62 : 0.5) * (overlays.bloom ? 0.7 : 1)
       waterMesh.visible = overlays.canals
       dataFlow.visible = overlays.links
+      placeFleet(division)
+      for (const f of fireCells) f.vis = overlays.fire && matchesBlock(f.block, division)
       for (const r of rainCells) for (const o of r.objects) o.visible = overlays.rain
-      for (const n of nodes) n.group.visible = n.block == null || matchesBlock(n.block, division)
       drawDrape(shown)
       refreshCallouts()
     }
@@ -1793,6 +2514,17 @@ export default function DigitalTwinScene(props: SceneProps) {
         })
         .sort((a, b) => rank(a.n) - rank(b.n) || a.y - b.y)
       const placed: { x0: number; x1: number; y0: number; y1: number }[] = []
+      // Badge block dianggap sudah menempati tempatnya: label sensor menghindarinya.
+      for (const z of zoneObjs) {
+        if (!z.group.visible) continue
+        z.badge.getWorldPosition(projected).project(camera)
+        if (projected.z > 1) continue
+        const bx = ((projected.x + 1) / 2) * w
+        const by = ((1 - projected.y) / 2) * h
+        const bw = z.badgeEl.offsetWidth || 90
+        const bh = z.badgeEl.offsetHeight || 34
+        placed.push({ x0: bx - bw / 2, x1: bx + bw / 2, y0: by - bh / 2, y1: by + bh / 2 })
+      }
       for (const it of items) {
         if (it.behind) continue
         let chosen: number | null = null
@@ -1836,18 +2568,33 @@ export default function DigitalTwinScene(props: SceneProps) {
       flyTo(tgt.clone().add(dir.multiplyScalar(30)), tgt)
     }
 
-    const flyToBlock = (b: number) => {
-      const own = assetsXZ.filter(({ asset }) => asset.block === TWIN_BLOCKS[b])
-      if (!own.length) return
-      const tgt = new THREE.Vector3(
-        own.reduce((a, o) => a + o.xz[0], 0) / own.length,
-        0.5,
-        own.reduce((a, o) => a + o.xz[1], 0) / own.length,
-      )
+    // Terbang ke wilayah block: titik orbit di tengah kotak batas block, jarak sebanding ukurannya.
+    const flyToBlock = (block: string) => {
+      const zs = zoneShapes.find((s) => s.zone.block === block)
+      if (!zs) return
+      const { x0, x1, z0, z1 } = zs.box
+      const tgt = new THREE.Vector3((x0 + x1) / 2, 0.5, (z0 + z1) / 2)
       const dir = camera.position.clone().sub(controls.target).normalize()
       if (dir.y < 0.55) dir.y = 0.55
       dir.normalize()
-      flyTo(tgt.clone().add(dir.multiplyScalar(46)), tgt)
+      flyTo(tgt.clone().add(dir.multiplyScalar(clamp(Math.hypot(x1 - x0, z1 - z0) * 1.25, 34, 80))), tgt)
+    }
+    // Sector: kunci "Block C:S3".
+    const flyToSector = (key: string) => {
+      const [block, id] = key.split(":")
+      const sec = BLOCK_ZONES.find((z) => z.block === block)?.sectors.find((s) => s.id === id)
+      if (!sec) return
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity
+      for (const [lng, lat] of sec.ring) {
+        const [x, z] = project(lng, lat)
+        x0 = Math.min(x0, x); x1 = Math.max(x1, x)
+        z0 = Math.min(z0, z); z1 = Math.max(z1, z)
+      }
+      const tgt = new THREE.Vector3((x0 + x1) / 2, 0.5, (z0 + z1) / 2)
+      const dir = camera.position.clone().sub(controls.target).normalize()
+      if (dir.y < 0.6) dir.y = 0.6
+      dir.normalize()
+      flyTo(tgt.clone().add(dir.multiplyScalar(clamp(Math.hypot(x1 - x0, z1 - z0) * 1.5, 18, 50))), tgt)
     }
 
     const raycaster = new THREE.Raycaster()
@@ -1878,7 +2625,21 @@ export default function DigitalTwinScene(props: SceneProps) {
       ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1)
       raycaster.setFromCamera(ndc, camera)
       const hit = raycaster.intersectObjects(pickables.filter((p) => p.parent?.visible), false)[0]
-      if (hit) propsRef.current.onSelect(hit.object.userData.id as string)
+      if (hit) {
+        propsRef.current.onSelect(hit.object.userData.id as string)
+        return
+      }
+      // Bukan sensor: klik sector di block aktif = pilih sector; klik block lain = pilih block.
+      const { onSelectBlock, onSelectSector, overlays, division, sector } = propsRef.current
+      if (!overlays.blocks) return
+      const secHit = onSelectSector ? raycaster.intersectObjects(sectorMeshes(division), false)[0] : undefined
+      if (secHit) {
+        const id = secHit.object.userData.sector as string
+        onSelectSector?.(id === sector ? null : id)
+        return
+      }
+      const zoneHit = onSelectBlock ? raycaster.intersectObjects(zoneFills, false)[0] : undefined
+      if (zoneHit) onSelectBlock?.(zoneHit.object.userData.block as string)
     }
     renderer.domElement.addEventListener("pointerdown", onDown)
     renderer.domElement.addEventListener("pointerup", onUp)
@@ -2015,7 +2776,14 @@ export default function DigitalTwinScene(props: SceneProps) {
 
       curtainMat.uniforms.uTime.value = t
       // Aliran kanal ikut bukaan pintu air (dianimasikan dari state yang tampil).
-      flow += dt * 0.32 * (shown.gate / LIVE_GATE_OPENING)
+      const { canalBlocking: blocking = false, frame: shownFrame } = propsRef.current
+      const damTarget = blocking && shownFrame.kind === "forecast" ? 1 : 0
+      if (Math.abs(damTarget - damShown) > 0.005) {
+        damShown += (damTarget - damShown) * (1 - Math.exp(-dt * 3))
+        placeDams(damShown)
+      }
+      // Sekat kanal menahan aliran parit.
+      flow += dt * 0.32 * (shown.gate / LIVE_GATE_OPENING) * (1 - 0.75 * damShown)
       waterMat.uniforms.uFlowDrain.value = flow
       waterMat.uniforms.uTime.value = t
       groundUniforms.uTime.value = t
@@ -2059,6 +2827,7 @@ export default function DigitalTwinScene(props: SceneProps) {
         n.ring.scale.setScalar((n.id === selectedId ? 1.55 * pulse : pulse) * (1 + 0.7 * n.flash))
         n.ringMat.opacity = n.level === "awas" ? 0.55 + 0.45 * Math.abs(Math.sin(t * 4)) : Math.min(1, 0.9 + 0.3 * n.flash)
         if (n.spin) n.spin.rotation.y = t * 0.8
+        if (n.gateLeaf) n.gateLeaf.position.y += (n.gateY - n.gateLeaf.position.y) * (1 - Math.exp(-dt * 2.5))
         if (n.offMark.visible) {
           const blink = 0.5 + 0.5 * Math.sin(t * 5 + n.x)
           n.offRing.scale.setScalar(1 + 0.18 * blink)
@@ -2068,6 +2837,7 @@ export default function DigitalTwinScene(props: SceneProps) {
       }
       stepData(t)
       stepWeather(t, dt)
+      stepFire(t, dt)
 
       if (fly) {
         const k = Math.min(1, (t - fly.t0) / fly.dur)
@@ -2085,6 +2855,32 @@ export default function DigitalTwinScene(props: SceneProps) {
         raycaster.setFromCamera(ndc, camera)
         const onSensor = raycaster.intersectObjects(pickables.filter((p) => p.parent?.visible), false).length > 0
         renderer.domElement.style.cursor = onSensor ? "pointer" : "grab"
+        const { onSelectBlock, onSelectSector, overlays, division } = propsRef.current
+        const canPick = !onSensor && overlays.blocks
+        const secHover =
+          canPick && onSelectSector
+            ? ((raycaster.intersectObjects(sectorMeshes(division), false)[0]?.object.userData.sector as string | undefined) ?? null)
+            : null
+        const zoneHover =
+          canPick && onSelectBlock && !secHover
+            ? ((raycaster.intersectObjects(zoneFills, false)[0]?.object.userData.block as string | undefined) ?? null)
+            : null
+        if (zoneHover !== hoveredZone || secHover !== hoveredSector) {
+          hoveredZone = zoneHover
+          hoveredSector = secHover
+          refreshZones()
+        }
+      } else if (!pointer && (hoveredZone || hoveredSector)) {
+        hoveredZone = null
+        hoveredSector = null
+        refreshZones()
+      }
+      // Sector semua block tampil saat kamera cukup dekat ke tanah.
+      const near = camera.position.distanceTo(controls.target) < 80
+      if (near !== sectorsNear) {
+        sectorsNear = near
+        refreshZones()
+        refreshCallouts()
       }
 
       controls.update()
@@ -2107,11 +2903,16 @@ export default function DigitalTwinScene(props: SceneProps) {
       setAutoRotate: (on) => {
         controls.autoRotate = on
       },
+      ping: (ids) => {
+        for (const n of nodes) if (ids.includes(n.id) && n.group.visible) n.flash = Math.max(n.flash, 0.75)
+      },
       setView: (view) => {
         if (view.mode === "focus") {
           select(view.id ?? null)
         } else if (view.mode === "block") {
-          flyToBlock(TWIN_BLOCKS.indexOf(view.id ?? ""))
+          flyToBlock(view.id ?? "")
+        } else if (view.mode === "sector") {
+          flyToSector(view.id ?? "")
         } else if (view.mode === "north") {
           // Putar ke arah utara tanpa mengubah jarak & kemiringan kamera.
           const offset = camera.position.clone().sub(controls.target)
@@ -2149,11 +2950,11 @@ export default function DigitalTwinScene(props: SceneProps) {
     }
   }, [])
 
-  const { frame, layer, overlays, night, division, selectedId, callouts, labelIds, autoRotate, view } = props
+  const { frame, layer, overlays, night, division, selectedId, callouts, labelIds, autoRotate, view, blockLevels, sector } = props
 
   useEffect(() => {
     apiRef.current?.refreshState()
-  }, [frame, layer, overlays, night, division])
+  }, [frame, layer, overlays, night, division, blockLevels, sector, props.haze, props.storm, props.canalBlocking])
 
   useEffect(() => {
     apiRef.current?.refreshCallouts()
@@ -2161,6 +2962,11 @@ export default function DigitalTwinScene(props: SceneProps) {
 
   // Pilihan baru (dari klik di model atau chip di kartu) → kamera terbang ke sensor.
   // Dibandingkan dengan pilihan sebelumnya supaya efek ganda StrictMode tidak ikut terbang.
+  const { ping } = props
+  useEffect(() => {
+    if (ping?.ids.length) apiRef.current?.ping(ping.ids)
+  }, [ping])
+
   const lastSelected = useRef(selectedId)
   useEffect(() => {
     if (lastSelected.current === selectedId) return

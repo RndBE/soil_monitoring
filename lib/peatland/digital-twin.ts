@@ -94,6 +94,8 @@ export const SCENARIO_PRESETS: { key: string; label: string; scenario: Omit<Scen
   { key: "retain", label: "Close Gates", scenario: { rainfall: 4, gateOpening: 20, canalBlocking: false } },
   { key: "rewet", label: "Rewetting", scenario: { rainfall: 4, gateOpening: 20, canalBlocking: true } },
   { key: "wet", label: "Heavy Rain", scenario: { rainfall: 35, gateOpening: 80, canalBlocking: false } },
+  // Kemarau + drainase berlebih: risiko api ekstrem, api menyebar & hotspot lama menyala lagi.
+  { key: "fire", label: "Fire Outbreak", scenario: { rainfall: 0, gateOpening: 90, canalBlocking: false } },
 ]
 
 export const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
@@ -464,6 +466,11 @@ export const ASSET_TYPE_META: Record<MarkerLayer, { short: string; color: string
   "water-gate": { short: "WTG", color: "#fbbf24" },
   "peat-station": { short: "PMS", color: "#a3e635" },
   "fire-hotspot": { short: "HS", color: "#fb7185" },
+  subsidence: { short: "SUB", color: "#f97316" },
+  cctv: { short: "CAM", color: "#e879f9" },
+  gateway: { short: "GW", color: "#a78bfa" },
+  repeater: { short: "RP", color: "#cbd5e1" },
+  aws: { short: "AWS", color: "#2dd4bf" },
 }
 
 export const ASSET_LAYER_LABEL: Record<MarkerLayer, string> = {
@@ -473,6 +480,11 @@ export const ASSET_LAYER_LABEL: Record<MarkerLayer, string> = {
   "water-gate": "Water Gate",
   "peat-station": "Peat Monitoring Station",
   "fire-hotspot": "Fire Hotspot (VIIRS)",
+  subsidence: "Subsidence Monitoring",
+  cctv: "CCTV Camera",
+  gateway: "LoRaWAN Gateway",
+  repeater: "Repeater / Field Node",
+  aws: "Automatic Weather Station",
 }
 
 const ASSET_META: Record<string, Pick<TwinAsset, "code" | "lastSeen" | "readings"> & { status?: StatusTone }> = {
@@ -493,6 +505,14 @@ const ASSET_META: Record<string, Pick<TwinAsset, "code" | "lastSeen" | "readings
   m15: { code: "HS-02", lastSeen: "01:42", readings: [{ label: "Confidence", value: "High" }, { label: "FRP", value: "18.7 MW" }, { label: "Satellite", value: "NOAA-20 VIIRS" }] },
   m16: { code: "PMS-07", lastSeen: "09:32", readings: [{ label: "Soil Moisture", value: "64%" }, { label: "Soil Temp", value: "27.8 °C" }, { label: "Peat Depth", value: "298 cm" }] },
   m17: { code: "RG-04", lastSeen: "09:30", readings: [{ label: "Rainfall 24h", value: "0 mm" }, { label: "Dry Days", value: "7" }, { label: "Battery", value: "81%" }] },
+  m18: { code: "AWS-01", lastSeen: "09:31", readings: [{ label: "Air Temp", value: "31.4 °C" }, { label: "Humidity", value: "68%" }, { label: "Wind", value: "2.1 m/s" }, { label: "Pressure", value: "1012 hPa" }] },
+  m19: { code: "GW-01", lastSeen: "09:28", readings: [{ label: "Nodes", value: "29" }, { label: "Uplink", value: "4G" }, { label: "Battery", value: "69%" }] },
+  m20: { code: "GW-02", lastSeen: "09:33", readings: [{ label: "Nodes", value: "27" }, { label: "Uplink", value: "4G" }, { label: "Battery", value: "70%" }] },
+  m21: { code: "GW-03", lastSeen: "09:31", readings: [{ label: "Nodes", value: "30" }, { label: "Uplink", value: "Satellite" }, { label: "Battery", value: "93%" }] },
+  m22: { code: "GW-04", lastSeen: "09:31", readings: [{ label: "Nodes", value: "27" }, { label: "Uplink", value: "4G" }, { label: "Battery", value: "62%" }] },
+  m23: { code: "GW-05", lastSeen: "09:32", readings: [{ label: "Nodes", value: "26" }, { label: "Uplink", value: "4G" }, { label: "Battery", value: "87%" }] },
+  m24: { code: "CAM-03", lastSeen: "09:20", readings: [{ label: "Stream", value: "25 fps" }, { label: "View", value: "Nursery & Replanting" }, { label: "Battery", value: "97%" }] },
+  m25: { code: "CAM-05", lastSeen: "09:32", readings: [{ label: "Stream", value: "25 fps" }, { label: "View", value: "Main Canal · Water Gate" }, { label: "Battery", value: "91%" }] },
 }
 
 // Bacaan utama live per aset (angka yang tampil di callout & sparkline).
@@ -512,6 +532,14 @@ const ASSET_PRIMARY: Record<string, { value: number; unit: string }> = {
   m15: { value: 18.7, unit: "MW" },
   m16: { value: 64, unit: "%" },
   m17: { value: 0, unit: "mm" },
+  m18: { value: 31.4, unit: "°C" },
+  m19: { value: 29, unit: "node" },
+  m20: { value: 27, unit: "node" },
+  m21: { value: 30, unit: "node" },
+  m22: { value: 27, unit: "node" },
+  m23: { value: 26, unit: "node" },
+  m24: { value: 25, unit: "fps" },
+  m25: { value: 25, unit: "fps" },
 }
 
 export const TWIN_ASSETS: TwinAsset[] = markerPoints.map((m) => {
@@ -557,11 +585,113 @@ export function ewsFromWaterTable(wt: number): EwsLevel {
   return "awas"
 }
 
+/** Perkiraan radius area terbakar (m) dari FRP hotspot (MW): ±250 m + 25 m per MW. */
+export function burnRadiusM(frp: number): number {
+  return 250 + 25 * Math.max(0, frp)
+}
+
+/** Intensitas ilustrasi api 0–1 dari level hotspot & FRP (normal/offline = padam). */
+export function fireIntensity(level: EwsLevel | "offline", frp: number | null): number {
+  const base = level === "awas" ? 1 : level === "siaga" ? 0.72 : level === "waspada" ? 0.4 : 0
+  return base === 0 ? 0 : clamp(base * (0.75 + Math.max(0, frp ?? 0) / 40), 0.25, 1.15)
+}
+
+// ---------------------------------------------------------------------------
+// Dampak simulasi kejadian (dipakai visual scene & HUD dampak; semua ≈ hasil model).
+
+/** Ambang intensitas induk tiap titik sebaran api (di atas intensitas live terbesar 1,15). */
+export const FIRE_SPREAD_THRESHOLDS = [1.25, 1.45, 1.65]
+
+/**
+ * Pengali intensitas api pada frame prakiraan: tumbuh tiap hari kering (lebih cepat bila
+ * drainase berlebih), diredam hujan, dan dipadamkan bertahap oleh pembasahan (sekat kanal).
+ * Frame live / replay = 1.
+ */
+export function fireGrowth(frame: TwinFrame, simDays: number, canalBlocking = false): number {
+  const days = frame.kind === "forecast" ? Math.max(0, simDays) : 0
+  if (days === 0) return 1
+  const dryness = 1 - clamp(frame.rain3d / 12, 0, 1)
+  const t = clamp((frame.rain3d - 6) / 14, 0, 1)
+  const wetDamp = 1 - t * t * (3 - 2 * t)
+  const rewet = canalBlocking ? clamp(1 - 0.11 * days, 0.12, 1) : 1
+  return (1 + 0.09 * days * dryness * (frame.gateOpening / LIVE_GATE_OPENING)) * wetDamp * rewet
+}
+
+/** Hotspot lama yang padam menyala lagi: hanya prakiraan tanpa hujan dengan risiko api ≥ 90. */
+export function reigniteIntensity(frame: TwinFrame, simDays: number, fireRisk: number): number {
+  const days = frame.kind === "forecast" ? Math.max(0, simDays) : 0
+  if (days < 1 || frame.rainfall >= 1 || fireRisk < 90) return 0
+  return clamp(0.25 + 0.14 * (days - 1) * (frame.gateOpening / LIVE_GATE_OPENING), 0, 1.6)
+}
+
+/** Perkiraan luas terbakar (ha) satu sumber api + titik sebarannya dari intensitas & FRP. */
+export function burnedAreaHa(intensity: number, frp: number): number {
+  if (intensity <= 0) return 0
+  const r = burnRadiusM(frp)
+  const base = (Math.PI * r * r) / 1e4
+  let ha = base * Math.min(1, intensity)
+  for (const th of FIRE_SPREAD_THRESHOLDS) ha += base * 0.6 * clamp((intensity - th) / 0.2, 0, 1)
+  return ha
+}
+
+/**
+ * Perkiraan luas tergenang (ha): sebagian block yang muka airnya mendekati/di atas permukaan
+ * (> −10 cm; maks. 30% luas block di +10 cm) + luapan sungai saat hujan 3 hari ≥ 16 mm (maks.
+ * 6% KHG, sama dengan genangan tepi sungai di scene). Maksimum ±36% KHG.
+ */
+export function floodedAreaHa(frame: TwinFrame, blockArea: Record<string, number>, totalArea: number): number {
+  let ha = 0
+  for (const [block, snap] of Object.entries(frame.blocks)) ha += (blockArea[block] ?? 0) * 0.3 * clamp((snap.waterTable + 10) / 20, 0, 1)
+  return ha + totalArea * 0.06 * clamp((frame.rain3d - 16) / 18, 0, 1)
+}
+
+/** Kabut asap 0–1 dari luas terbakar (ha): mulai terasa di atas ±120 ha, pekat di ±800 ha. */
+export function hazeLevel(burnedHa: number): number {
+  return clamp((burnedHa - 120) / 700, 0, 1)
+}
+
+/** Perkiraan ISPU PM2.5 & jarak pandang dari tingkat kabut asap. */
+export function airQuality(haze: number): { ispu: number; label: string; visibilityKm: number; level: EwsLevel } {
+  const ispu = Math.round(40 + haze * 320)
+  const visibilityKm = Math.round((10 - 9.2 * haze) * 10) / 10
+  if (ispu > 300) return { ispu, label: "Berbahaya", visibilityKm, level: "awas" }
+  if (ispu > 200) return { ispu, label: "Sangat tidak sehat", visibilityKm, level: "awas" }
+  if (ispu > 100) return { ispu, label: "Tidak sehat", visibilityKm, level: "siaga" }
+  if (ispu > 50) return { ispu, label: "Sedang", visibilityKm, level: "waspada" }
+  return { ispu, label: "Baik", visibilityKm, level: "normal" }
+}
+
+/** Angin permukaan (AWS-01): arah ke timur laut, menguat saat kemarau. */
+export function windOf(frame: TwinFrame): { speed: number; toward: string; deg: number } {
+  const dry = frame.kind === "forecast" ? 1 - clamp(frame.rain3d / 12, 0, 1) : 0.5
+  return { speed: round1(1.6 + 2.2 * dry), toward: "timur laut", deg: 60 }
+}
+
 export function ewsFromFireRisk(index: number): EwsLevel {
   if (index >= 85) return "awas"
   if (index >= 70) return "siaga"
   if (index >= 50) return "waspada"
   return "normal"
+}
+
+/**
+ * Level EWS satu block: dari muka air rata-rata block, dinaikkan oleh hotspot
+ * yang masih aktif di dalamnya (level hotspot offline diabaikan).
+ */
+export function blockEwsLevel(waterTable: number, hotspotLevels: (EwsLevel | "offline")[] = []): EwsLevel {
+  let level = ewsFromWaterTable(waterTable)
+  for (const h of hotspotLevels) {
+    if (h !== "offline" && EWS_LEVELS.indexOf(h) > EWS_LEVELS.indexOf(level)) level = h
+  }
+  return level
+}
+
+/** EWS laju subsidence (cm/th): ≤ 3 (setara −30 cm) normal, < 4 (PP 57) waspada, < 6 siaga, sisanya awas. */
+export function ewsFromSubsidence(rate: number): EwsLevel {
+  if (rate <= subsidenceRate(WT_TARGET)) return "normal"
+  if (rate < subsidenceRate(WT_COMPLIANCE)) return "waspada"
+  if (rate < subsidenceRate(WT_CRITICAL)) return "siaga"
+  return "awas"
 }
 
 export function ewsFromMoisture(pct: number): EwsLevel {
@@ -579,7 +709,7 @@ export type AssetReading = {
 }
 
 // Sebaran spasial hujan: faktor tiap penakar terhadap hujan skenario.
-const GAUGE_FACTOR: Record<string, number> = { "RG-01": 1.2, "RG-02": 0.85, "RG-04": 0.6 }
+export const GAUGE_FACTOR: Record<string, number> = { "RG-01": 1.2, "RG-02": 0.85, "RG-04": 0.6 }
 
 function formatReading(value: number, unit: string): string {
   const n = Number.isInteger(value) ? String(value) : value.toFixed(1)
@@ -617,10 +747,24 @@ export function assetReading(asset: TwinAsset, frame: TwinFrame, live: TwinFrame
       if (frame.kind !== "live") value = frame.gateOpening
       level = "normal"
       break
-    default:
+    case "fire-hotspot":
       // Hotspot: FRP mengikuti perubahan risiko api block.
       value = round1(value * (now.fireRisk / Math.max(1, then.fireRisk)))
       level = ewsFromFireRisk(now.fireRisk)
+      break
+    case "subsidence":
+      // Laju subsidence ikut kedalaman drainase block (≈ 1 cm/th per 10 cm muka air).
+      value = round1(Math.max(0, value + subsidenceRate(now.waterTable) - subsidenceRate(then.waterTable)))
+      level = ewsFromSubsidence(value)
+      break
+    case "aws":
+      // Suhu udara turun saat hujan skenario.
+      if (frame.kind !== "live") value = round1(asset.primary.value - Math.min(frame.rainfall, 30) * 0.12)
+      level = "normal"
+      break
+    default:
+      // Gateway, repeater, CCTV: tidak bergantung skenario.
+      level = "normal"
   }
   return { value, unit, text: formatReading(value, unit), level }
 }
@@ -648,6 +792,9 @@ export const TWIN_STREAMS: { label: string; source: string; value: string; laten
   { label: "Water Gates", source: "SCADA", value: "2/3", latency: "1 min", status: "critical" },
   { label: "Rain Gauges", source: "GSM", value: "8/8", latency: "10 min", status: "normal" },
   { label: "Peat Stations", source: "LoRaWAN", value: "14/15", latency: "15 min", status: "normal" },
+  { label: "AWS", source: "LoRaWAN", value: "1/1", latency: "10 min", status: "normal" },
+  { label: "CCTV", source: "4G", value: "5/6", latency: "live", status: "warning" },
+  { label: "LoRaWAN Gateways", source: "4G · Satellite", value: "5/5", latency: "1 min", status: "normal" },
   { label: "NDVI (Sentinel-2)", source: "Satellite", value: "8 Sep", latency: "2 days", status: "normal" },
   { label: "Hotspot (VIIRS)", source: "Satellite", value: "2 active", latency: "8 h", status: "warning" },
 ]

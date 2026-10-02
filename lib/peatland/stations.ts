@@ -1,18 +1,26 @@
 // Registri stasiun lapangan tunggal untuk semua halaman: kode, jenis, block,
-// koordinat, bacaan utama, dan status EWS. Stasiun yang dimodelkan di scene 3D
-// punya `twinId` (m1..m17, lihat [[map-points]] & [[digital-twin]]); bacaannya
-// diambil dari TWIN_ASSETS supaya tabel, peta, dan twin selalu sama.
-// Koordinat stasiun non-twin di-generate di dalam polygon KHG, di wilayah
-// block-nya (sensor twin terdekat ber-block sama). Jangan diedit manual.
+// sector, koordinat, bacaan utama, dan status EWS. Stasiun yang dimodelkan di scene
+// 3D punya `twinId` (m1..m25, lihat [[map-points]] & [[digital-twin]]); bacaannya
+// diambil dari TWIN_ASSETS supaya tabel, peta, dan twin selalu sama. Registri = 34
+// stasiun inti + AWS, gateway LoRaWAN, dan CCTV (subset armada 139 perangkat di KPI).
+// Armada lengkap hasil generate (subsidence, repeater, dll.) ada di [[station-fleet]]
+// tetapi sengaja belum dimasukkan agar peta tidak terlalu padat.
+// Koordinat stasiun non-twin di-generate di dalam wilayah block-nya
+// (lihat [[block-zones]]). Jangan diedit manual.
 
 import {
   ASSET_LAYER_LABEL,
+  EWS_LEVELS,
   EWS_META,
+  GAUGE_FACTOR,
   TWIN_ASSETS,
   ewsFromMoisture,
+  ewsFromSubsidence,
   ewsFromWaterTable,
   type EwsLevel,
+  type TwinFrame,
 } from "./digital-twin"
+import { blockZone, zoneAt } from "./block-zones"
 import type { MarkerLayer } from "./map-points"
 
 export type StationLevel = EwsLevel | "offline"
@@ -22,11 +30,14 @@ export type Station = {
   code: string
   type: MarkerLayer
   block: string
+  /** Sector (S1–S5) di dalam block, dari posisi stasiun. */
+  sector: string | null
   lat: number
   lng: number
   /** Id aset di digital twin; null = tidak dimodelkan di scene 3D. */
   twinId: string | null
-  /** Bacaan utama (muka air cm, kelembapan %, hujan 24 jam mm, bukaan %, FRP MW). */
+  /** Bacaan utama (muka air cm, kelembapan %, hujan 24 jam mm, bukaan %, FRP MW,
+   *  subsidence cm/th, CCTV fps, gateway jumlah node, repeater RSSI dBm, AWS suhu °C). */
   value: number | null
   unit: string
   level: StationLevel
@@ -39,7 +50,7 @@ export type Station = {
   soilTemp?: number
 }
 
-type Seed = Omit<Station, "lat" | "lng" | "level" | "value" | "unit" | "lastSeen"> & {
+export type StationSeed = Omit<Station, "sector" | "lat" | "lng" | "level" | "value" | "unit" | "lastSeen"> & {
   lat?: number
   lng?: number
   value?: number | null
@@ -48,13 +59,13 @@ type Seed = Omit<Station, "lat" | "lng" | "level" | "value" | "unit" | "lastSeen
   lastSeen?: string
 }
 
-const SEEDS: Seed[] = [
+const SEEDS: StationSeed[] = [
   // Borehole (muka air, cm)
-  { code: "BH-01", type: "borehole", block: "Block B", twinId: null, lat: 1.1109, lng: 101.79988, value: -31, battery: 92, signal: "Good", lastSeen: "09:36" },
+  { code: "BH-01", type: "borehole", block: "Block B", twinId: null, lat: 1.15297, lng: 101.63873, value: -31, battery: 92, signal: "Good", lastSeen: "09:36" },
   { code: "BH-02", type: "borehole", block: "Block A", twinId: null, lat: 1.07846, lng: 101.83978, value: -26, battery: 88, signal: "Good", lastSeen: "09:35" },
   { code: "BH-03", type: "borehole", block: "Block A", twinId: "m2", battery: 95, signal: "Good" },
   { code: "BH-04", type: "borehole", block: "Block B", twinId: null, lat: 1.11406, lng: 101.62362, value: -33, battery: 71, signal: "Fair", lastSeen: "09:34" },
-  { code: "BH-05", type: "borehole", block: "Block C", twinId: null, lat: 1.01868, lng: 101.8694, value: -26, battery: 90, signal: "Good", lastSeen: "09:33" },
+  { code: "BH-05", type: "borehole", block: "Block C", twinId: null, lat: 1.33874, lng: 101.5315, value: -26, battery: 90, signal: "Good", lastSeen: "09:33" },
   { code: "BH-07", type: "borehole", block: "Block C", twinId: "m5", battery: 58, signal: "Weak" },
   { code: "BH-09", type: "borehole", block: "Block E", twinId: null, lat: 1.11398, lng: 101.72077, value: -25, battery: 96, signal: "Good", lastSeen: "09:33" },
   { code: "BH-11", type: "borehole", block: "Block C", twinId: "m6", battery: 73, signal: "Fair" },
@@ -67,7 +78,7 @@ const SEEDS: Seed[] = [
   // Rain gauge (hujan 24 jam, mm) — rata-rata 6 penakar = 18,6 mm (KPI dashboard)
   { code: "RG-01", type: "rain-gauge", block: "Block B", twinId: "m3", battery: 90, signal: "Good" },
   { code: "RG-02", type: "rain-gauge", block: "Block E", twinId: "m10", battery: 88, signal: "Good" },
-  { code: "RG-03", type: "rain-gauge", block: "Block C", twinId: null, lat: 1.05976, lng: 101.82552, value: 8.2, battery: 86, signal: "Good", lastSeen: "09:30" },
+  { code: "RG-03", type: "rain-gauge", block: "Block C", twinId: null, lat: 1.27129, lng: 101.56523, value: 8.2, battery: 86, signal: "Good", lastSeen: "09:30" },
   { code: "RG-04", type: "rain-gauge", block: "Block B", twinId: "m17", battery: 81, signal: "Good", level: "waspada", note: "7 hari tanpa hujan" },
   { code: "RG-05", type: "rain-gauge", block: "Block D", twinId: null, lat: 1.22284, lng: 101.63535, value: 38.6, battery: 79, signal: "Fair", lastSeen: "09:31" },
   { code: "RG-06", type: "rain-gauge", block: "Block A", twinId: null, lat: 1.01831, lng: 101.82452, value: 28.2, battery: 67, signal: "Weak", lastSeen: "09:29" },
@@ -78,7 +89,7 @@ const SEEDS: Seed[] = [
   // Stasiun gambut (kelembapan tanah, %)
   { code: "PMS-01", type: "peat-station", block: "Block A", twinId: null, lat: 1.0926, lng: 101.86297, value: 68, battery: 91, signal: "Good", lastSeen: "09:34", peatDepth: 322, soilTemp: 28.4 },
   { code: "PMS-02", type: "peat-station", block: "Block B", twinId: null, lat: 1.09541, lng: 101.67564, value: 65, battery: 87, signal: "Good", lastSeen: "09:33", peatDepth: 305, soilTemp: 28.1 },
-  { code: "PMS-03", type: "peat-station", block: "Block C", twinId: null, lat: 1.04313, lng: 101.87145, value: 38, battery: 76, signal: "Fair", lastSeen: "09:31", peatDepth: 289, soilTemp: 29.2 },
+  { code: "PMS-03", type: "peat-station", block: "Block C", twinId: null, lat: 1.25105, lng: 101.52475, value: 38, battery: 76, signal: "Fair", lastSeen: "09:31", peatDepth: 289, soilTemp: 29.2 },
   { code: "PMS-04", type: "peat-station", block: "Block D", twinId: null, lat: 1.23558, lng: 101.57561, value: 71, battery: 89, signal: "Good", lastSeen: "09:30", peatDepth: 310, soilTemp: 27.6 },
   { code: "PMS-05", type: "peat-station", block: "Block D", twinId: "m8", battery: 70, signal: "Fair", peatDepth: 310, soilTemp: 30.1 },
   { code: "PMS-06", type: "peat-station", block: "Block D", twinId: "m12", battery: 82, signal: "Good", peatDepth: 318, soilTemp: 29.0 },
@@ -89,6 +100,15 @@ const SEEDS: Seed[] = [
   { code: "HS-02", type: "fire-hotspot", block: "Block D", twinId: "m15", battery: 100, signal: "Good", level: "awas", note: "Aktif · confidence high" },
   { code: "HS-03", type: "fire-hotspot", block: "Block C", twinId: null, lat: 1.30825, lng: 101.56291, value: 0, unit: "MW", battery: 100, signal: "Good", lastSeen: "8 Sep 13:20", level: "normal", note: "Padam · diverifikasi 8 Sep" },
   { code: "HS-04", type: "fire-hotspot", block: "Block D", twinId: null, lat: 1.17099, lng: 101.57762, value: 0, unit: "MW", battery: 100, signal: "Good", lastSeen: "9 Sep 01:40", level: "normal", note: "Positif palsu · atap seng" },
+  // Perangkat yang dimodelkan di twin dengan bentuk sendiri (AWS, gateway, CCTV)
+  { code: "AWS-01", type: "aws", block: "Block B", twinId: "m18", battery: 78, signal: "Fair", note: "RH 68% · angin 2,1 m/s · 1.012 hPa · dipakai bersama semua block" },
+  { code: "GW-01", type: "gateway", block: "Block A", twinId: "m19", battery: 69, signal: "Fair", note: "LoRaWAN · mast 12 m · uplink 4G" },
+  { code: "GW-02", type: "gateway", block: "Block B", twinId: "m20", battery: 70, signal: "Fair", note: "LoRaWAN · mast 12 m · uplink 4G" },
+  { code: "GW-03", type: "gateway", block: "Block C", twinId: "m21", battery: 93, signal: "Good", note: "LoRaWAN · mast 12 m · uplink satelit" },
+  { code: "GW-04", type: "gateway", block: "Block D", twinId: "m22", battery: 62, signal: "Fair", note: "LoRaWAN · mast 12 m · uplink 4G" },
+  { code: "GW-05", type: "gateway", block: "Block E", twinId: "m23", battery: 87, signal: "Good", note: "LoRaWAN · mast 12 m · uplink 4G" },
+  { code: "CAM-03", type: "cctv", block: "Block C", twinId: "m24", battery: 97, signal: "Good", note: "Nursery & Replanting" },
+  { code: "CAM-05", type: "cctv", block: "Block D", twinId: "m25", battery: 91, signal: "Good", note: "Main Canal · Water Gate" },
 ]
 
 const UNIT: Record<MarkerLayer, string> = {
@@ -98,6 +118,11 @@ const UNIT: Record<MarkerLayer, string> = {
   "water-gate": "%",
   "peat-station": "%",
   "fire-hotspot": "MW",
+  subsidence: "cm/th",
+  cctv: "fps",
+  gateway: "node",
+  repeater: "dBm",
+  aws: "°C",
 }
 
 function levelOf(type: MarkerLayer, value: number | null): StationLevel {
@@ -105,6 +130,9 @@ function levelOf(type: MarkerLayer, value: number | null): StationLevel {
   if (type === "borehole" || type === "water-station") return ewsFromWaterTable(value)
   if (type === "peat-station") return ewsFromMoisture(value)
   if (type === "rain-gauge") return value >= 50 ? "siaga" : value >= 30 ? "waspada" : "normal"
+  if (type === "subsidence") return ewsFromSubsidence(value)
+  // Repeater: sinyal lemah (RSSI ≤ −95 dBm) perlu dicek.
+  if (type === "repeater") return value <= -95 ? "waspada" : "normal"
   return "normal"
 }
 
@@ -112,10 +140,13 @@ export const STATIONS: Station[] = SEEDS.map((s) => {
   const twin = s.twinId ? TWIN_ASSETS.find((a) => a.id === s.twinId) : undefined
   const offline = twin?.status === "offline"
   const value = s.value !== undefined ? s.value : offline ? null : (twin?.primary?.value ?? null)
+  const lat = twin?.lat ?? s.lat ?? 0
+  const lng = twin?.lng ?? s.lng ?? 0
   return {
     ...s,
-    lat: twin?.lat ?? s.lat ?? 0,
-    lng: twin?.lng ?? s.lng ?? 0,
+    sector: zoneAt(lat, lng)?.sector ?? null,
+    lat,
+    lng,
     value,
     unit: s.unit ?? twin?.primary?.unit ?? UNIT[s.type],
     level: offline ? "offline" : (s.level ?? levelOf(s.type, value)),
@@ -124,6 +155,9 @@ export const STATIONS: Station[] = SEEDS.map((s) => {
 })
 
 export const STATION_TYPE_LABEL = ASSET_LAYER_LABEL
+
+/** Jenis stasiun yang benar-benar ada di registri, urut seperti STATION_TYPE_LABEL. */
+export const STATION_TYPES = (Object.keys(ASSET_LAYER_LABEL) as MarkerLayer[]).filter((t) => STATIONS.some((s) => s.type === t))
 
 export function stationByCode(code: string): Station | undefined {
   return STATIONS.find((s) => s.code === code)
@@ -148,6 +182,65 @@ export function formatStationValue(s: Pick<Station, "value" | "unit">): string {
 
 export function stationLevelLabel(level: StationLevel): string {
   return level === "offline" ? "Offline" : EWS_META[level].label
+}
+
+// Faktor sebaran hujan per penakar: faktor twin bila ada, selain itu rasio bacaan live
+// terhadap rata-rata live semua penakar (dibatasi 0,4–1,8).
+const RAIN_GAUGES = STATIONS.filter((s) => s.type === "rain-gauge")
+const RAIN_MEAN = RAIN_GAUGES.reduce((a, s) => a + (s.value ?? 0), 0) / Math.max(1, RAIN_GAUGES.length) || 1
+const RAIN_FACTOR: Record<string, number> = Object.fromEntries(
+  RAIN_GAUGES.map((s) => [s.code, GAUGE_FACTOR[s.code] ?? Math.min(1.8, Math.max(0.4, (s.value ?? RAIN_MEAN) / RAIN_MEAN))])
+)
+
+/** Hujan 24 jam (mm) tiap penakar pada frame: live = telemetri registri; lainnya = hujan frame × faktor penakar. */
+export function gaugeRainfall(frame: TwinFrame): Record<string, number> {
+  return Object.fromEntries(
+    RAIN_GAUGES.map((s) => [s.code, frame.kind === "live" ? (s.value ?? 0) : Math.round(frame.rainfall * RAIN_FACTOR[s.code] * 10) / 10])
+  )
+}
+
+/**
+ * Cuaca sel hujan di twin: cerah / gerimis / deras. Frame live memakai total 24 jam yang
+ * sudah lewat, jadi ambangnya lebih tinggi (hanya penakar yang lebat yang tampil hujan);
+ * frame simulasi memakai hujan harian skenario.
+ */
+export function rainWeather(mm: number, live = false): "ok" | "warn" | "alarm" {
+  if (live) return mm >= 50 ? "alarm" : mm >= 25 ? "warn" : "ok"
+  return mm >= 25 ? "alarm" : mm > 0.5 ? "warn" : "ok"
+}
+
+/** Level EWS terburuk dari daftar stasiun (offline diabaikan); kosong = normal. */
+export function worstLevel(stations: Pick<Station, "level">[]): EwsLevel {
+  let worst: EwsLevel = "normal"
+  for (const s of stations) {
+    if (s.level !== "offline" && EWS_LEVELS.indexOf(s.level) > EWS_LEVELS.indexOf(worst)) worst = s.level
+  }
+  return worst
+}
+
+export type SectorSummary = {
+  id: string
+  areaHa: number
+  stations: Station[]
+  offline: number
+  /** Level EWS terburuk sensor di sector (kondisi live). */
+  level: EwsLevel
+}
+
+/** Ringkasan S1–S5 sebuah block: luas, stasiun, jumlah offline, level terburuk. */
+export function sectorSummaries(block: string): SectorSummary[] {
+  const zone = blockZone(block)
+  if (!zone) return []
+  return zone.sectors.map((sec) => {
+    const stations = STATIONS.filter((s) => s.block === block && s.sector === sec.id)
+    return {
+      id: sec.id,
+      areaHa: sec.areaHa,
+      stations,
+      offline: stations.filter((s) => s.level === "offline").length,
+      level: worstLevel(stations),
+    }
+  })
 }
 
 export type TwinLink = {

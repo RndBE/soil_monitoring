@@ -23,6 +23,9 @@ const DigitalTwinScene = dynamic(() => import("./digital-twin-scene"), {
 const OVERLAYS: TwinOverlays = {
   imagery: true,
   canals: true,
+  blocks: true,
+  fleet: true,
+  fire: true,
   zones: true,
   theme: false,
   rain: true,
@@ -56,8 +59,10 @@ export function TwinPreview() {
         view={VIEW}
         callouts={live.callouts}
         weather={live.weather}
+        blockLevels={live.blockLevels}
         monoFont="var(--font-jetbrains-mono), ui-monospace, monospace"
         onSelect={(id) => router.push(twinHref({ asset: id }))}
+        onSelectBlock={(block) => router.push(twinHref({ block }))}
         onAzimuth={noop}
         onUserOrbit={() => setAutoRotate(false)}
       />

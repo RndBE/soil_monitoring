@@ -586,6 +586,288 @@ a {
   }
 }
 
+/* Marker stasiun ber-ikon jenis: lencana gelap, ikon & bingkai warna jenis (--tc),
+   titik level EWS di pojok (--lv). */
+.peat-sensor {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  color: var(--tc);
+  background: rgb(4 14 10 / 0.9);
+  border: 1.5px solid var(--tc);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.4),
+    0 0 10px color-mix(in srgb, var(--tc) 45%, transparent),
+    0 2px 6px rgb(0 0 0 / 0.55);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.peat-sensor__lv {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: var(--lv);
+  border: 1.5px solid #04100b;
+  box-shadow: 0 0 6px var(--lv);
+}
+
+.peat-sensor--off {
+  border-style: dashed;
+  color: color-mix(in srgb, var(--tc) 55%, #8a9a92);
+}
+
+.peat-sensor--pulse::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 2px solid var(--lv);
+  animation: peat-marker-pulse 1.8s ease-out infinite;
+}
+
+/* Marker ringkas saat zoom jauh: titik warna jenis, cincin level bila tidak normal. */
+.peat-dot {
+  position: relative;
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 1px;
+  border-radius: 9999px;
+  background: var(--tc);
+  border: 1.5px solid rgb(4 14 10 / 0.9);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--tc) 60%, transparent);
+}
+
+.peat-dot--ring {
+  border-color: var(--lv);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5), 0 0 7px var(--lv);
+}
+
+.peat-marker-icon:hover .peat-dot {
+  transform: scale(1.35);
+}
+
+.peat-marker-icon:hover .peat-sensor {
+  transform: scale(1.18);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.4),
+    0 0 16px color-mix(in srgb, var(--tc) 70%, transparent),
+    0 3px 9px rgb(0 0 0 / 0.6);
+}
+
+/* Ilustrasi kebakaran di peta 2D: api berkedip, cahaya, asap naik tertiup angin,
+   dan lingkaran area terbakar yang berdenyut. */
+.peat-fire-icon {
+  background: transparent;
+  border: 0;
+  pointer-events: none;
+}
+
+.peat-fire {
+  position: relative;
+  display: block;
+}
+
+.peat-fire__flame {
+  position: absolute;
+  inset: auto 14% 0;
+  width: 72%;
+  height: 72%;
+  transform-origin: 50% 100%;
+  filter: drop-shadow(0 0 6px rgb(251 146 60 / 0.9));
+  animation: peat-flicker 0.9s ease-in-out infinite alternate;
+}
+
+.peat-fire__outer {
+  fill: #f97316;
+}
+
+.peat-fire__inner {
+  fill: #fde047;
+  transform-origin: 50% 100%;
+  animation: peat-flicker 0.55s ease-in-out infinite alternate-reverse;
+}
+
+.peat-fire__glow {
+  position: absolute;
+  left: 50%;
+  bottom: -6%;
+  width: 120%;
+  height: 34%;
+  border-radius: 9999px;
+  background: radial-gradient(closest-side, rgb(251 146 60 / 0.75), rgb(239 68 68 / 0.25) 60%, transparent);
+  transform: translateX(-50%);
+  animation: peat-glow 1.4s ease-in-out infinite alternate;
+}
+
+.peat-fire__smoke {
+  position: absolute;
+  left: 42%;
+  bottom: 55%;
+  width: 46%;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  background: radial-gradient(closest-side, rgb(120 113 108 / 0.75), rgb(68 64 60 / 0.35) 65%, transparent);
+  opacity: 0;
+  animation: peat-smoke 3.6s ease-out infinite;
+}
+
+.peat-fire__smoke:nth-child(2) {
+  animation-delay: 1.2s;
+}
+
+.peat-fire__smoke:nth-child(3) {
+  animation-delay: 2.4s;
+}
+
+@keyframes peat-flicker {
+  0% {
+    transform: scale(1, 0.94) skewX(-2deg);
+  }
+  50% {
+    transform: scale(0.96, 1.05) skewX(2deg);
+  }
+  100% {
+    transform: scale(1.04, 0.98) skewX(-1deg);
+  }
+}
+
+@keyframes peat-glow {
+  from {
+    opacity: 0.65;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes peat-smoke {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.5);
+  }
+  15% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(26px, -46px) scale(2.2);
+  }
+}
+
+.peat-fire-zone {
+  animation: peat-fire-zone 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes peat-fire-zone {
+  from {
+    fill-opacity: 0.12;
+    stroke-opacity: 0.6;
+  }
+  to {
+    fill-opacity: 0.3;
+    stroke-opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .peat-fire__flame,
+  .peat-fire__inner,
+  .peat-fire__glow,
+  .peat-fire__smoke,
+  .peat-fire-zone {
+    animation: none;
+  }
+  .peat-fire__smoke {
+    opacity: 0.5;
+  }
+}
+
+/* Badge block di peta (nama + luas + level), warna block (--bc), titik level (--lv). */
+.peat-zone-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+}
+
+.peat-zone {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 10px 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bc) 72%, #04100b);
+  border: 1px solid color-mix(in srgb, var(--bc) 60%, #ffffff);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.45);
+  color: #fff;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.peat-zone:hover,
+.peat-zone.is-active {
+  transform: scale(1.06);
+}
+
+.peat-zone.is-active {
+  box-shadow:
+    0 0 0 2px rgb(255 255 255 / 0.75),
+    0 6px 18px rgb(0 0 0 / 0.45);
+}
+
+.peat-zone b {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+}
+
+.peat-zone small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgb(255 255 255 / 0.9);
+}
+
+.peat-zone small i {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--lv);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+}
+
+.peat-sector-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  pointer-events: none;
+}
+
+.peat-sector {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: rgb(255 255 255 / 0.85);
+  text-shadow:
+    0 0 3px rgb(0 0 0 / 0.95),
+    0 1px 2px rgb(0 0 0 / 0.9);
+}
+
 /* === CCTV feed — kesan kamera pengawas === */
 .cctv-scanlines::after {
   content: "";
@@ -857,7 +1139,74 @@ a {
    membuat frame canvas kadang tampil sebagian (pita hitam); twin referensi juga tidak memakainya. */
 .twin-label-anchor { pointer-events: none; }
 .twin-label.is-hidden { opacity: 0; pointer-events: none; }
+.twin-label__ic { display: inline-flex; flex: none; color: var(--c); }
 
+/* Badge block di model 3D (warna block --bc, titik level --lv) & label sector. */
+.twin-zone {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--bc) 65%, #ffffff);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bc) 70%, #04100b);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  transition: transform 0.2s, opacity 0.25s, box-shadow 0.2s;
+}
+.twin-zone b { font-weight: 800; letter-spacing: 0.03em; }
+.twin-zone small { font-size: 10px; color: rgba(255, 255, 255, 0.82); }
+.twin-zone__lv {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.twin-zone__lv::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--lv);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 6px var(--lv);
+}
+.twin-zone:hover { transform: scale(1.05); }
+.twin-zone.is-active { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8), 0 6px 18px rgba(0, 0, 0, 0.5); }
+.twin-zone.is-dim { opacity: 0.45; }
+.twin-sector {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+
+/* Titik sampel terbaru di grafik streaming live. */
+.twin-live-pulse { animation: twin-blink 1.2s ease-in-out infinite; }
+
+/* Kilat saat badai (simulasi hujan lebat): kilatan singkat berulang di atas model. */
+.twin-lightning { animation: twin-lightning 5.5s infinite; }
+@keyframes twin-lightning {
+  0%, 90%, 100% { background: rgba(220, 232, 255, 0); }
+  91% { background: rgba(220, 232, 255, 0.26); }
+  92% { background: rgba(220, 232, 255, 0.04); }
+  93.5% { background: rgba(220, 232, 255, 0.18); }
+  95% { background: rgba(220, 232, 255, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .twin-lightning { animation: none; }
+}
 
 .twin-spinner {
   width: 12px;

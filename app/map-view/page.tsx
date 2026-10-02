@@ -11,6 +11,7 @@ import {
   BoxIcon,
   ClockIcon,
   LayersIcon,
+  LayoutGridIcon,
   MapPinnedIcon,
   RadioTowerIcon,
   WifiOffIcon,
@@ -19,16 +20,21 @@ import { toast } from "sonner"
 
 import { PeatShell } from "@/components/peatland/peat-shell"
 import { Panel, PanelHeader, TableScroll, ViewAll, tableRow, tableTd, tableTh } from "@/components/peatland/panel"
+import { BlockDetail } from "@/components/peatland/block-detail"
+import { BlockStatusBoard } from "@/components/peatland/block-status"
 import { EstateMap } from "@/components/peatland/estate-map"
+import { SensorIcon } from "@/components/peatland/sensor-icon"
 import { StatTile } from "@/components/peatland/stat-tile"
-import { EwsPill, StatusDot, levelColor, levelLabel, type Tone } from "@/components/peatland/status"
+import { EwsPill, OFFLINE_COLOR, StatusDot, levelColor, levelLabel, type Tone } from "@/components/peatland/status"
 import { tooltipStyle } from "@/components/peatland/chart-theme"
 import { OpenInTwin } from "@/components/peatland/open-in-twin"
-import { ASSET_TYPE_META, TWIN_BLOCKS } from "@/lib/peatland/digital-twin"
-import { blockPoints, canalLines, markerPoints, type MarkerKind, type MarkerLayer } from "@/lib/peatland/map-points"
-import { mapLayers, plantationHealth, stations as fleet } from "@/lib/peatland/mock-data"
+import { ASSET_TYPE_META, EWS_LEVELS, EWS_META, TWIN_BLOCKS } from "@/lib/peatland/digital-twin"
+import { BLOCK_ZONES, KHG_AREA_HA, blockZone, zoneAt } from "@/lib/peatland/block-zones"
+import { canalLines, type MarkerLayer } from "@/lib/peatland/map-points"
+import { mapLayers, stations as fleet } from "@/lib/peatland/mock-data"
 import {
   STATIONS,
+  STATION_TYPES,
   STATION_TYPE_LABEL,
   formatLatLng,
   formatStationValue,
@@ -38,10 +44,11 @@ import {
   type StationSignal,
 } from "@/lib/peatland/stations"
 import { useDashboardFilters } from "@/lib/peatland/filters"
+import { useTwinLive } from "@/lib/peatland/use-twin-live"
 import { ALL_BLOCKS, DIVISION_OPTIONS, matchesBlock } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
-const TYPES = Object.keys(STATION_TYPE_LABEL) as MarkerLayer[]
+const TYPES = STATION_TYPES
 const isStationType = (key: string): key is MarkerLayer => key in STATION_TYPE_LABEL
 
 // Warna layer di legenda: jenis aset pakai ASSET_TYPE_META (sama dengan twin 3D),
@@ -52,14 +59,10 @@ const LAYER_COLOR: Record<string, string> = {
   "plantation-block": "#6ee7b7",
 }
 
-// Warna marker peta 2D (sama dengan estate-map-leaflet): marker diwarnai STATUS,
-// pintu air selalu biru apa pun statusnya.
-const MARKER_STATUS: { kind: MarkerKind; label: string; color: string }[] = [
-  { kind: "normal", label: "Normal", color: "#22c55e" },
-  { kind: "warning", label: "Warning", color: "#f59e0b" },
-  { kind: "critical", label: "Critical", color: "#ef4444" },
-  { kind: "offline", label: "Offline", color: "#64748b" },
-  { kind: "gate", label: "Water Gate", color: "#38bdf8" },
+// Level EWS marker peta 2D (titik di pojok ikon marker, lihat estate-map-leaflet).
+const MARKER_STATUS: { level: StationLevel; label: string; color: string }[] = [
+  ...EWS_LEVELS.map((l) => ({ level: l, label: EWS_META[l].label, color: EWS_META[l].color })),
+  { level: "offline", label: "Offline", color: OFFLINE_COLOR },
 ]
 
 const LEVEL_FILTERS: (StationLevel | "all")[] = ["all", "normal", "waspada", "siaga", "awas", "offline"]
@@ -72,6 +75,11 @@ const READING_LABEL: Record<MarkerLayer, string> = {
   "water-gate": "Gate opening",
   "peat-station": "Soil moisture",
   "fire-hotspot": "Fire radiative power",
+  subsidence: "Subsidence rate",
+  cctv: "Video stream",
+  gateway: "Connected nodes",
+  repeater: "Signal (RSSI)",
+  aws: "Air temperature",
 }
 
 // Halaman modul per jenis stasiun (tautan dari panel detail).
@@ -81,6 +89,9 @@ const TYPE_PAGE: Partial<Record<MarkerLayer, string>> = {
   "rain-gauge": "/weather-rainfall",
   "peat-station": "/peat-monitoring",
   "fire-hotspot": "/fire-risk",
+  subsidence: "/peat-monitoring/subsidence",
+  cctv: "/",
+  aws: "/weather-rainfall",
 }
 
 const SIGNAL_TONE: Record<StationSignal, Tone> = { Good: "normal", Fair: "warning", Weak: "warning", "No signal": "offline" }
@@ -173,6 +184,7 @@ function StationDetail({ s }: { s: Station | undefined }) {
   }
   const meta = ASSET_TYPE_META[s.type]
   const page = TYPE_PAGE[s.type]
+  const sector = zoneAt(s.lat, s.lng)?.sector
   const batteryColor = s.battery >= 50 ? "#46d78f" : s.battery >= 20 ? "#ffd27a" : "#ff7a66"
   return (
     <Panel>
@@ -180,7 +192,7 @@ function StationDetail({ s }: { s: Station | undefined }) {
         kicker={`Stasiun · ${meta.short}`}
         icon={RadioTowerIcon}
         title={s.code}
-        subtitle={`${STATION_TYPE_LABEL[s.type]} · ${s.block}`}
+        subtitle={`${STATION_TYPE_LABEL[s.type]} · ${s.block}${sector ? ` · ${sector}` : ""}`}
         action={<EwsPill level={s.level} pulse={s.level === "awas" || s.level === "offline"} />}
       />
       <div className="flex flex-col gap-3 px-4 pb-4">
@@ -229,7 +241,13 @@ function StationDetail({ s }: { s: Station | undefined }) {
 }
 
 export default function MapViewPage() {
-  const { division, setDivision } = useDashboardFilters()
+  const { division, setDivision, estate } = useDashboardFilters()
+  const { blockLevels } = useTwinLive(estate)
+  const selectBlock = (block: string) => setDivision(division === block ? ALL_BLOCKS : block)
+  // Sector terpilih hanya berlaku untuk block yang sedang dipilih.
+  const [sectorSel, setSectorSel] = useState<{ block: string; id: string } | null>(null)
+  const activeSector = sectorSel && sectorSel.block === division ? sectorSel.id : null
+  const selectSector = (id: string | null) => setSectorSel(id ? { block: division, id } : null)
 
   // Visibilitas layer — sumber kebenaran tunggal yang mengendalikan peta (EstateMap)
   // sekaligus Layer Legend. true = tampil.
@@ -241,30 +259,35 @@ export default function MapViewPage() {
   const toggleLayer = (key: string) => setVisibleLayers((prev) => ({ ...prev, [key]: !prev[key] }))
   const toggleAllLayers = (target: boolean) => setVisibleLayers(Object.fromEntries(mapLayers.map((l) => [l.key, target])))
 
-  // Marker yang benar-benar digambar peta (layer tampil & lolos filter division).
-  const drawnMarkers = useMemo(
-    () => markerPoints.filter((m) => visibleLayers[m.layer] && matchesBlock(m.block, division)),
-    [visibleLayers, division]
-  )
-  const markerBreakdown = MARKER_STATUS.map((s) => ({ ...s, count: drawnMarkers.filter((m) => m.kind === s.kind).length }))
-
   // Registri stasiun (subset armada estate) yang lolos filter division.
   const registry = useMemo(() => STATIONS.filter((s) => matchesBlock(s.block, division)), [division])
   const registryOffline = STATIONS.filter((s) => s.level === "offline")
 
+  // Marker yang benar-benar digambar peta (layer jenis tampil & lolos filter division).
+  const drawnMarkers = useMemo(() => registry.filter((s) => visibleLayers[s.type]), [registry, visibleLayers])
+  const markerBreakdown = MARKER_STATUS.map((s) => ({ ...s, count: drawnMarkers.filter((m) => m.level === s.level).length }))
+
+  const zonesInScope = BLOCK_ZONES.filter((z) => matchesBlock(z.block, division))
   const legendRows = mapLayers.map((l) => {
     if (isStationType(l.key)) {
-      const onMap = markerPoints.filter((m) => m.layer === l.key && matchesBlock(m.block, division)).length
       const total = registry.filter((s) => s.type === l.key).length
-      return { ...l, color: LAYER_COLOR[l.key], count: `${onMap} / ${total}` }
+      return { ...l, color: LAYER_COLOR[l.key], count: String(total) }
     }
     if (l.key === "canal") return { ...l, color: LAYER_COLOR.canal, count: String(canalLines.length) }
-    return { ...l, color: LAYER_COLOR[l.key] ?? "#6ee7b7", count: String(blockPoints.filter((b) => matchesBlock(b.label, division)).length) }
+    return {
+      ...l,
+      color: LAYER_COLOR[l.key] ?? "#6ee7b7",
+      count: `${zonesInScope.length} · ${zonesInScope.reduce((a, z) => a + z.sectors.length, 0)}`,
+    }
   })
 
-  const areaRows = plantationHealth.filter((p) => matchesBlock(p.block, division))
-  const area = areaRows.reduce((a, p) => a + p.area, 0)
-  const totalArea = plantationHealth.reduce((a, p) => a + p.area, 0)
+  // Luas dari polygon block (bukan luas tanam): seluruh KHG atau block terpilih.
+  const zone = blockZone(division)
+  const area = zone?.areaHa ?? KHG_AREA_HA
+
+  // Papan status block: jumlah sensor registri per block & ringkasan sistem.
+  const sensorsPerBlock = Object.fromEntries(BLOCK_ZONES.map((z) => [z.block, STATIONS.filter((s) => s.block === z.block).length]))
+  const activeHotspots = STATIONS.filter((s) => s.type === "fire-hotspot" && s.level !== "normal" && s.level !== "offline")
 
   // Station directory: filter jenis/status/block, urutan, dan stasiun terpilih.
   const [typeFilter, setTypeFilter] = useState<MarkerLayer | "all">("all")
@@ -276,12 +299,15 @@ export default function MapViewPage() {
 
   const directory = useMemo(() => {
     const rows = registry.filter(
-      (s) => (typeFilter === "all" || s.type === typeFilter) && (levelFilter === "all" || s.level === levelFilter)
+      (s) =>
+        (typeFilter === "all" || s.type === typeFilter) &&
+        (levelFilter === "all" || s.level === levelFilter) &&
+        (!activeSector || s.sector === activeSector)
     )
     const cmp = SORTERS[sort.key]
     const sign = sort.dir === "asc" ? 1 : -1
     return [...rows].sort((a, b) => sign * cmp(a, b) || SORTERS.code(a, b))
-  }, [registry, typeFilter, levelFilter, sort])
+  }, [registry, typeFilter, levelFilter, sort, activeSector])
 
   const typeCount = (t: MarkerLayer | "all") =>
     registry.filter((s) => (t === "all" || s.type === t) && (levelFilter === "all" || s.level === levelFilter)).length
@@ -324,7 +350,7 @@ export default function MapViewPage() {
           icon={RadioTowerIcon}
           tone="info"
           status={`Estate-wide fleet · ${TWIN_BLOCKS.length} blocks`}
-          foot={`Registered in twin registry: ${STATIONS.length}`}
+          foot={`Registry: ${STATIONS.filter((s) => s.type !== "fire-hotspot").length} devices + ${STATIONS.filter((s) => s.type === "fire-hotspot").length} hotspots`}
         />
         <StatTile
           label="Online"
@@ -341,7 +367,7 @@ export default function MapViewPage() {
           icon={WifiOffIcon}
           tone="offline"
           status="Needs attention"
-          foot={`${registryOffline.length} in registry (${registryOffline.map((s) => s.code).join(", ")})`}
+          foot={`${registryOffline.length} in registry · ${registryOffline.slice(0, 3).map((s) => s.code).join(", ")}${registryOffline.length > 3 ? " …" : ""}`}
           onClick={showOffline}
         />
         <StatTile
@@ -359,9 +385,9 @@ export default function MapViewPage() {
           icon={MapPinnedIcon}
           tone="normal"
           foot={
-            division === ALL_BLOCKS
-              ? `${areaRows.length} blocks · KHG Giam Siak Kecil`
-              : `${division} · of ${totalArea.toLocaleString("en-US")} ha`
+            zone
+              ? `${zone.block} · ${zone.sectors.length} sectors · of ${KHG_AREA_HA.toLocaleString("en-US")} ha`
+              : `${BLOCK_ZONES.length} blocks · ${BLOCK_ZONES.length * 5} sectors · KHG Giam Siak Kecil`
           }
           href="/plantation-health"
         />
@@ -376,6 +402,43 @@ export default function MapViewPage() {
         />
       </div>
 
+      {/* Status per block (klik tile = fokus peta ke block) */}
+      <Panel>
+        <PanelHeader
+          kicker="Block · status EWS"
+          icon={LayoutGridIcon}
+          title="Block Status"
+          subtitle={`KHG Giam Siak Kecil · ${KHG_AREA_HA.toLocaleString("en-US")} ha · ${BLOCK_ZONES.length} blocks × 5 sectors · click a block to focus the map`}
+          action={
+            division !== ALL_BLOCKS ? (
+              <button
+                type="button"
+                onClick={() => setDivision(ALL_BLOCKS)}
+                className="text-[11.5px] font-medium text-emerald-400 transition-colors hover:text-emerald-300"
+              >
+                All blocks
+              </button>
+            ) : undefined
+          }
+        />
+        <BlockStatusBoard
+          className="px-4 pb-4"
+          levels={blockLevels}
+          sensors={sensorsPerBlock}
+          selected={division}
+          onSelect={selectBlock}
+          stats={[
+            { label: "Total sensor", value: String(fleet.total), sub: `${fleet.percent}% online` },
+            {
+              label: "Hotspot aktif",
+              value: String(activeHotspots.length),
+              sub: activeHotspots.map((s) => s.code).join(", ") || "—",
+              color: activeHotspots.length ? EWS_META.awas.color : undefined,
+            },
+          ]}
+        />
+      </Panel>
+
       {/* Main map row */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
         {/* xl: tinggi peta ikut kolom kanan (Legend + Quick Stats) supaya tidak ada celah */}
@@ -388,15 +451,17 @@ export default function MapViewPage() {
             onToggleLayer={toggleLayer}
             onToggleAll={toggleAllLayers}
             showLayerPanel={false}
+            sector={activeSector}
+            onSelectSector={selectSector}
           />
         </div>
 
         <div className="grid grid-cols-1 gap-4">
           <Panel>
-            <PanelHeader kicker="Peta · layer" icon={LayersIcon} title="Layer Legend" subtitle="Dot = asset type · click to show / hide" />
+            <PanelHeader kicker="Peta · layer" icon={LayersIcon} title="Layer Legend" subtitle="Icon = sensor type · click to show / hide" />
             <div className="flex items-center justify-between px-4 pb-1">
               <span className="kicker text-white/50">Layer</span>
-              <span className="kicker text-white/50">On map / registry</span>
+              <span className="kicker text-white/50">Count</span>
             </div>
             <div className="flex flex-col gap-0.5 px-2 pb-2">
               {legendRows.map((l) => {
@@ -413,10 +478,14 @@ export default function MapViewPage() {
                     )}
                   >
                     <span className="flex items-center gap-2.5 text-[12px] text-white/75">
-                      <span
-                        className="size-2.5 rounded-full"
-                        style={{ background: hidden ? "transparent" : l.color, boxShadow: hidden ? `inset 0 0 0 1.5px ${l.color}` : undefined }}
-                      />
+                      {isStationType(l.key) ? (
+                        <SensorIcon type={l.key} style={{ color: l.color }} />
+                      ) : (
+                        <span
+                          className={cn("w-3.5 shrink-0", l.key === "canal" ? "border-t-2" : "h-2.5 rounded-[3px] border-2")}
+                          style={{ borderColor: l.color }}
+                        />
+                      )}
                       {l.label}
                     </span>
                     <span className="font-mono text-[11.5px] font-semibold tabular-nums text-white/85">{l.count}</span>
@@ -425,13 +494,13 @@ export default function MapViewPage() {
               })}
             </div>
             <p className="border-t border-white/[0.06] px-4 py-2.5 text-[11px] text-white/50">
-              Markers on the map are coloured by status (see Quick Stats). Only stations modelled in the twin are drawn; the
-              directory lists the full registry.
+              Every registry station is drawn with its type icon; the dot on its corner is the EWS level (see Quick Stats).
+              Block &amp; Sector counts blocks · sectors.
             </p>
           </Panel>
 
           <Panel>
-            <PanelHeader kicker="Peta · status marker" title="Quick Stats" subtitle="Markers drawn on the map, by status colour" />
+            <PanelHeader kicker="Peta · status marker" title="Quick Stats" subtitle="Markers drawn on the map, by EWS level" />
             <div className="flex items-center gap-3 px-4 pb-4 pt-1">
               <div className="relative h-[110px] w-[110px] shrink-0">
                 <ResponsiveContainer width="100%" height="100%">
@@ -449,7 +518,7 @@ export default function MapViewPage() {
                       {markerBreakdown
                         .filter((s) => s.count > 0)
                         .map((s) => (
-                          <Cell key={s.kind} fill={s.color} />
+                          <Cell key={s.level} fill={s.color} />
                         ))}
                     </Pie>
                   </PieChart>
@@ -461,7 +530,7 @@ export default function MapViewPage() {
               </div>
               <div className="flex flex-1 flex-col gap-1.5">
                 {markerBreakdown.map((s) => (
-                  <div key={s.kind} className="flex items-center justify-between text-[12px]">
+                  <div key={s.level} className="flex items-center justify-between text-[12px]">
                     <span className="flex items-center gap-2 text-white/70">
                       <span className="size-2 rounded-full" style={{ background: s.color }} />
                       {s.label}
@@ -472,11 +541,42 @@ export default function MapViewPage() {
               </div>
             </div>
             <p className="border-t border-white/[0.06] px-4 py-2.5 text-[11px] text-white/50">
-              Water gates always use a blue marker; their live status (e.g. WTG-02 offline) is in the directory.
+              Awas &amp; offline markers pulse. Click a block on the map (or a tile above) to focus it.
             </p>
           </Panel>
         </div>
       </div>
+
+      {/* Detail block terpilih (setara "detail 1 cluster" referensi) */}
+      {zone && (
+        <Panel>
+          <PanelHeader
+            kicker="Block · detail"
+            icon={LayoutGridIcon}
+            title={`Detail ${zone.block}${activeSector ? ` · ${activeSector}` : ""}`}
+            subtitle={`${zone.areaHa.toLocaleString("en-US")} ha · ${zone.sectors.length} sectors · ${STATIONS.filter((s) => s.block === zone.block).length} stations · status ${EWS_META[blockLevels[zone.block] ?? "normal"].label}`}
+            action={
+              <>
+                <OpenInTwin variant="link" label="Open in twin" block={zone.block} />
+                <button
+                  type="button"
+                  onClick={() => setDivision(ALL_BLOCKS)}
+                  className="text-[11.5px] font-medium text-emerald-400 transition-colors hover:text-emerald-300"
+                >
+                  All blocks
+                </button>
+              </>
+            }
+          />
+          <BlockDetail
+            className="px-4 pb-4"
+            block={zone.block}
+            level={blockLevels[zone.block] ?? "normal"}
+            selectedSector={activeSector}
+            onSelectSector={selectSector}
+          />
+        </Panel>
+      )}
 
       {/* Station directory + detail */}
       <div ref={directoryRef} className="grid scroll-mt-4 grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
@@ -557,6 +657,7 @@ export default function MapViewPage() {
                   <SortTh label="Code" k="code" sort={sort} onSort={onSort} />
                   <SortTh label="Type" k="type" sort={sort} onSort={onSort} />
                   <SortTh label="Block" k="block" sort={sort} onSort={onSort} />
+                  <th className={tableTh}>Sector</th>
                   <th className={tableTh}>Coordinates</th>
                   <th className={cn(tableTh, "text-right")}>Reading</th>
                   <SortTh label="Status" k="level" sort={sort} onSort={onSort} />
@@ -601,6 +702,7 @@ export default function MapViewPage() {
                         </span>
                       </td>
                       <td className={cn(tableTd, "whitespace-nowrap text-white/75")}>{s.block}</td>
+                      <td className={cn(tableTd, "whitespace-nowrap font-mono text-[11.5px] text-white/65")}>{s.sector ?? "—"}</td>
                       <td className={cn(tableTd, "whitespace-nowrap font-mono text-[11px] text-white/55")}>{formatLatLng(s.lat, s.lng)}</td>
                       <td className={cn(tableTd, "whitespace-nowrap text-right font-mono tabular-nums text-white/85")}>
                         {formatStationValue(s)}
@@ -620,7 +722,7 @@ export default function MapViewPage() {
                 })}
                 {directory.length === 0 && (
                   <tr className="border-t border-white/[0.06]">
-                    <td className={cn(tableTd, "text-white/50")} colSpan={8}>
+                    <td className={cn(tableTd, "text-white/50")} colSpan={9}>
                       Tidak ada stasiun untuk filter ini
                     </td>
                   </tr>

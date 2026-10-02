@@ -7,12 +7,24 @@
 import { useMemo } from "react"
 
 import type { TwinCallout, TwinWeather } from "@/components/peatland/digital-twin-scene"
-import { TWIN_ASSETS, assetReading, buildHistoryFrames, getBlockBaseline, type TwinFrame } from "./digital-twin"
+import {
+  TWIN_ASSETS,
+  TWIN_BLOCKS,
+  assetReading,
+  blockEwsLevel,
+  buildHistoryFrames,
+  getBlockBaseline,
+  type EwsLevel,
+  type TwinFrame,
+} from "./digital-twin"
+import { gaugeRainfall, rainWeather } from "./stations"
 
 export type TwinLive = {
   frame: TwinFrame
   callouts: Record<string, TwinCallout>
   weather: Record<string, TwinWeather>
+  /** Level EWS tiap block (muka air block + hotspot aktif). */
+  blockLevels: Record<string, EwsLevel>
 }
 
 export function useTwinLive(estate: string): TwinLive {
@@ -25,11 +37,17 @@ export function useTwinLive(estate: string): TwinLive {
     for (const a of TWIN_ASSETS) {
       const r = assetReading(a, frame, frame)
       callouts[a.id] = { text: r.text, level: r.level, value: r.value }
-      if (a.layer === "rain-gauge") {
-        const mm = r.value ?? 0
-        weather[a.id] = mm >= 25 ? "alarm" : mm > 0.5 ? "warn" : "ok"
-      }
     }
-    return { frame, callouts, weather }
+    for (const [code, mm] of Object.entries(gaugeRainfall(frame))) weather[code] = rainWeather(mm, true)
+    const blockLevels = Object.fromEntries(
+      TWIN_BLOCKS.map((b) => [
+        b,
+        blockEwsLevel(
+          frame.blocks[b].waterTable,
+          TWIN_ASSETS.filter((a) => a.block === b && a.layer === "fire-hotspot").map((a) => callouts[a.id].level)
+        ),
+      ])
+    )
+    return { frame, callouts, weather, blockLevels }
   }, [estate])
 }

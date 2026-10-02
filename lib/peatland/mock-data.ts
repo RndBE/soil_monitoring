@@ -139,7 +139,10 @@ export const mapLayers: MapLayer[] = [
   { key: "canal", label: "Canal", enabled: true },
   { key: "peat-station", label: "Peat Monitoring Station", enabled: true },
   { key: "fire-hotspot", label: "Fire Hotspot (VIIRS)", enabled: true },
-  { key: "plantation-block", label: "Plantation Block", enabled: true },
+  { key: "aws", label: "Automatic Weather Station", enabled: true },
+  { key: "cctv", label: "CCTV Camera", enabled: true },
+  { key: "gateway", label: "LoRaWAN Gateway", enabled: true },
+  { key: "plantation-block", label: "Block & Sector", enabled: true },
 ]
 
 export type MapMarker = {
