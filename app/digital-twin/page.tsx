@@ -82,6 +82,7 @@ import {
   fireIntensity,
   floodedAreaHa,
   hazeLevel,
+  rainVisible,
   reigniteIntensity,
   windOf,
   buildHistoryFrames,
@@ -267,7 +268,7 @@ const MODE_PRESET: Record<TwinMode, { overlays: Partial<TwinOverlays>; layer?: T
 // Simulasi kejadian langsung di panggung 3D: pilih → skenario diterapkan, mode yang cocok
 // dinyalakan, lalu prakiraan diputar dari kini sampai akhir horizon (hujan, api, banjir terlihat).
 const ALL_EVENTS: { key: string; label: string; icon: LucideIcon; hint: string; mode: TwinMode }[] = [
-  { key: "baseline", label: "Normal", icon: ActivityIcon, hint: "Baseline · hujan 4 mm/hari, pintu air 60%", mode: "monitoring" },
+  { key: "baseline", label: "Normal", icon: ActivityIcon, hint: "Kondisi normal · cerah (hujan ringan 4 mm/hari), pintu air 60%, hotspot dipadamkan", mode: "monitoring" },
   { key: "wet", label: "Hujan lebat", icon: CloudRainIcon, hint: "35 mm/hari · badai di semua penakar, genangan, api padam", mode: "monitoring" },
   { key: "dry", label: "Kemarau", icon: SunIcon, hint: "Tanpa hujan · muka air turun, risiko api naik", mode: "kebakaran" },
   { key: "fire", label: "Kebakaran", icon: FlameIcon, hint: "Kemarau + drainase berlebih · api menyebar, hotspot lama menyala lagi", mode: "kebakaran" },
@@ -987,9 +988,11 @@ export default function DigitalTwinPage() {
 
   // Cuaca tiap penakar hujan untuk sel hujan di model: cerah / gerimis / deras.
   // Semua penakar di registri (dikunci kode stasiun), bukan hanya yang dimodelkan.
+  // Prakiraan dengan hujan sangat ringan (skenario Normal) tetap cerah, lihat rainVisible.
   const weather = useMemo(() => {
     const out: Record<string, TwinWeather> = {}
-    for (const [code, mm] of Object.entries(gaugeRainfall(frame))) out[code] = rainWeather(mm, frame.kind === "live")
+    const visible = rainVisible(frame)
+    for (const [code, mm] of Object.entries(gaugeRainfall(frame))) out[code] = visible ? rainWeather(mm, frame.kind === "live") : "ok"
     return out
   }, [frame])
 
@@ -1076,6 +1079,7 @@ export default function DigitalTwinPage() {
     .filter((a): a is TwinAsset => a != null)
     .map((a) => {
       const mm = assetReading(a, frame, liveFrame).value ?? 0
+      if (!rainVisible(frame)) return { code: a.code, text: weatherLabel(0), wet: false, heavy: false }
       return { code: a.code, text: weatherLabel(mm), wet: mm > 0.5, heavy: mm >= 25 }
     })
 

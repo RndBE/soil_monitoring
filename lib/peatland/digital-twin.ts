@@ -79,6 +79,8 @@ export type TwinFrame = {
   rain3d: number
   gateOpening: number
   blocks: Record<string, BlockSnapshot>
+  /** Prakiraan dengan hotspot aktif dipadamkan (skenario Normal): api tidak tampil. */
+  suppressFire?: boolean
 }
 
 export type Scenario = {
@@ -86,17 +88,31 @@ export type Scenario = {
   gateOpening: number
   days: number
   canalBlocking: boolean
+  /** Hotspot aktif dipadamkan sejak awal prakiraan dan tidak menyala lagi. */
+  suppressFire: boolean
 }
 
+// Baseline = kondisi normal: hujan ringan rata-rata (tidak tampil sebagai hujan, lihat
+// VISIBLE_RAIN_MM) dan hotspot aktif dipadamkan, jadi tidak ada api maupun gerimis.
 export const SCENARIO_PRESETS: { key: string; label: string; scenario: Omit<Scenario, "days"> }[] = [
-  { key: "baseline", label: "Baseline", scenario: { rainfall: 4, gateOpening: LIVE_GATE_OPENING, canalBlocking: false } },
-  { key: "dry", label: "Dry Spell", scenario: { rainfall: 0, gateOpening: LIVE_GATE_OPENING, canalBlocking: false } },
-  { key: "retain", label: "Close Gates", scenario: { rainfall: 4, gateOpening: 20, canalBlocking: false } },
-  { key: "rewet", label: "Rewetting", scenario: { rainfall: 4, gateOpening: 20, canalBlocking: true } },
-  { key: "wet", label: "Heavy Rain", scenario: { rainfall: 35, gateOpening: 80, canalBlocking: false } },
+  { key: "baseline", label: "Baseline", scenario: { rainfall: 4, gateOpening: LIVE_GATE_OPENING, canalBlocking: false, suppressFire: true } },
+  { key: "dry", label: "Dry Spell", scenario: { rainfall: 0, gateOpening: LIVE_GATE_OPENING, canalBlocking: false, suppressFire: false } },
+  { key: "retain", label: "Close Gates", scenario: { rainfall: 4, gateOpening: 20, canalBlocking: false, suppressFire: false } },
+  { key: "rewet", label: "Rewetting", scenario: { rainfall: 4, gateOpening: 20, canalBlocking: true, suppressFire: false } },
+  { key: "wet", label: "Heavy Rain", scenario: { rainfall: 35, gateOpening: 80, canalBlocking: false, suppressFire: false } },
   // Kemarau + drainase berlebih: risiko api ekstrem, api menyebar & hotspot lama menyala lagi.
-  { key: "fire", label: "Fire Outbreak", scenario: { rainfall: 0, gateOpening: 90, canalBlocking: false } },
+  { key: "fire", label: "Fire Outbreak", scenario: { rainfall: 0, gateOpening: 90, canalBlocking: false, suppressFire: false } },
 ]
+
+/**
+ * Hujan harian skenario di bawah ambang ini (BMKG: hujan sangat ringan, < 5 mm/hari) tidak
+ * digambar sebagai hujan di prakiraan twin. Frame live & replay tidak terpengaruh.
+ */
+export const VISIBLE_RAIN_MM = 5
+
+export function rainVisible(frame: TwinFrame): boolean {
+  return frame.kind !== "forecast" || frame.rainfall >= VISIBLE_RAIN_MM
+}
 
 export const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
 const round1 = (v: number) => Math.round(v * 10) / 10
@@ -203,6 +219,7 @@ export function simulateScenario(baseline: BlockState[], scenario: Scenario): Tw
       rain3d,
       gateOpening: scenario.gateOpening,
       blocks: Object.fromEntries(baseline.map((b) => [b.block, snapshot(b, wt[b.block], rain3d)])),
+      ...(scenario.suppressFire ? { suppressFire: true } : {}),
     })
   }
   return frames
@@ -240,6 +257,7 @@ export function frameAt(frames: TwinFrame[], pos: number, liveIndex: number): Tw
     rain3d: round1(mix(a.rain3d, b.rain3d)),
     gateOpening: Math.round(mix(a.gateOpening, b.gateOpening)),
     blocks,
+    ...(b.suppressFire ? { suppressFire: true } : {}),
   }
 }
 
@@ -620,7 +638,7 @@ export function fireGrowth(frame: TwinFrame, simDays: number, canalBlocking = fa
 /** Hotspot lama yang padam menyala lagi: hanya prakiraan tanpa hujan dengan risiko api ≥ 90. */
 export function reigniteIntensity(frame: TwinFrame, simDays: number, fireRisk: number): number {
   const days = frame.kind === "forecast" ? Math.max(0, simDays) : 0
-  if (days < 1 || frame.rainfall >= 1 || fireRisk < 90) return 0
+  if (days < 1 || frame.suppressFire || frame.rainfall >= 1 || fireRisk < 90) return 0
   return clamp(0.25 + 0.14 * (days - 1) * (frame.gateOpening / LIVE_GATE_OPENING), 0, 1.6)
 }
 
@@ -748,7 +766,12 @@ export function assetReading(asset: TwinAsset, frame: TwinFrame, live: TwinFrame
       level = "normal"
       break
     case "fire-hotspot":
-      // Hotspot: FRP mengikuti perubahan risiko api block.
+      // Hotspot: FRP mengikuti perubahan risiko api block; padam bila skenario memadamkan api.
+      if (frame.suppressFire) {
+        value = 0
+        level = "normal"
+        break
+      }
       value = round1(value * (now.fireRisk / Math.max(1, then.fireRisk)))
       level = ewsFromFireRisk(now.fireRisk)
       break
