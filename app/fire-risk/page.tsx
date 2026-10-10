@@ -5,6 +5,7 @@ import {
   BoxIcon,
   ChevronDownIcon,
   CloudRainIcon,
+  ExternalLinkIcon,
   FlameIcon,
   GaugeIcon,
   MapPinIcon,
@@ -27,7 +28,7 @@ import {
 import { toast } from "sonner"
 
 import { PeatShell } from "@/components/peatland/peat-shell"
-import { Panel, PanelHeader, TableScroll, ViewAll, tableRow, tableTd, tableTh } from "@/components/peatland/panel"
+import { Panel, PanelHeader, TableScroll, tableRow, tableTd, tableTh } from "@/components/peatland/panel"
 import { StatTile } from "@/components/peatland/stat-tile"
 import { EwsPill, EwsScale, StatusDot, type Tone } from "@/components/peatland/status"
 import {
@@ -55,9 +56,11 @@ import {
   summarizeFrame,
   type EwsLevel,
 } from "@/lib/peatland/digital-twin"
+import { FIRMS_BUFFER_KM, type FirmsConfidence, type FirmsHotspot } from "@/lib/peatland/firms"
 import { fireRiskTrend, waterTableTrend } from "@/lib/peatland/mock-data"
 import { formatLatLng, stationsOfType, type Station } from "@/lib/peatland/stations"
 import { useDashboardFilters } from "@/lib/peatland/filters"
+import { useFirmsHotspots } from "@/lib/peatland/use-firms-hotspots"
 import { ALL_BLOCKS, matchesBlock, scaleNumber } from "@/lib/peatland/filter-logic"
 import { cn } from "@/lib/utils"
 
@@ -228,10 +231,11 @@ function RiskBar({ value, level }: { value: number; level: EwsLevel }) {
 }
 
 // ---------------------------------------------------------------------------
-// Hotspot VIIRS — dari registri stasiun (HS-01..04)
+// Hotspot VIIRS — NASA FIRMS (NOAA-20 & NOAA-21), lihat [[firms]]. Status
+// verifikasi disimpan di state halaman (belum tersimpan ke database, hilang saat
+// reload); deteksi baru selalu mulai sebagai Investigating.
 
 type HotspotStatus = "Investigating" | "Confirmed" | "Extinguished" | "False positive"
-type Confidence = "High" | "Nominal" | "Low"
 
 const CONFIDENCE_FILTERS = ["All", "High", "Nominal", "Low"] as const
 type ConfFilter = (typeof CONFIDENCE_FILTERS)[number]
@@ -244,7 +248,7 @@ const STATUS_TONE: Record<HotspotStatus, Tone> = {
   Extinguished: "normal",
   "False positive": "offline",
 }
-const CONF_TONE: Record<Confidence, Tone> = { High: "critical", Nominal: "warning", Low: "info" }
+const CONF_TONE: Record<FirmsConfidence, Tone> = { High: "critical", Nominal: "warning", Low: "info" }
 
 const STATUS_MSG: Record<HotspotStatus, string> = {
   Investigating: "dikembalikan ke investigasi",
@@ -273,39 +277,21 @@ const actionClass: Record<"danger" | "ok" | "muted", string> = {
   muted: "text-white/65 ring-white/12 hover:bg-white/[0.06]",
 }
 
-// Confidence VIIRS & status verifikasi awal (sesuai catatan registri).
-const HOTSPOT_META: Record<string, { confidence: Confidence; status: HotspotStatus }> = {
-  "HS-01": { confidence: "Nominal", status: "Investigating" },
-  "HS-02": { confidence: "High", status: "Confirmed" },
-  "HS-03": { confidence: "High", status: "Extinguished" },
-  "HS-04": { confidence: "Low", status: "False positive" },
+/** "10 Oct 13:42 WIB" dari waktu ISO UTC (Riau = UTC+7). */
+function fmtWib(iso: string): string {
+  const d = new Date(Date.parse(iso) + 7 * 3600_000)
+  const hh = String(d.getUTCHours()).padStart(2, "0")
+  const mm = String(d.getUTCMinutes()).padStart(2, "0")
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${hh}:${mm} WIB`
 }
 
-type Hotspot = {
-  code: string
-  block: string
-  coords: string
-  twinId: string | null
-  frp: number
-  detected: string
-  confidence: Confidence
-  level: EwsLevel
+/** "Block D · S3" di dalam KHG, "Buffer · 4.2 km" di zona penyangga. */
+function locationOf(h: FirmsHotspot): string {
+  return h.block ? `${h.block}${h.sector ? ` · ${h.sector}` : ""}` : `Buffer · ${h.distanceKm} km`
 }
 
-const HOTSPOTS: Hotspot[] = stationsOfType("fire-hotspot").map((s) => ({
-  code: s.code,
-  block: s.block,
-  coords: formatLatLng(s.lat, s.lng),
-  twinId: s.twinId,
-  frp: s.value ?? 0,
-  detected: /Sep/.test(s.lastSeen) ? s.lastSeen : `10 Sep ${s.lastSeen}`,
-  confidence: HOTSPOT_META[s.code]?.confidence ?? "Nominal",
-  level: s.level === "offline" ? "normal" : s.level,
-}))
-
-const INITIAL_STATUS: Record<string, HotspotStatus> = Object.fromEntries(
-  HOTSPOTS.map((h) => [h.code, HOTSPOT_META[h.code]?.status ?? "Investigating"])
-)
+// Peta FIRMS NASA berpusat di KHG Giam Siak Kecil, untuk verifikasi visual.
+const FIRMS_MAP_URL = "https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;@101.66,1.20,10.6z"
 
 const RAIN_GAUGES = stationsOfType("rain-gauge")
 const dryDaysOf = (g: Station) => Number(g.note?.match(/(\d+) hari tanpa hujan/)?.[1] ?? 0)
@@ -317,7 +303,8 @@ export default function FireRiskPage() {
 
   const [trendRange, setTrendRange] = useState<TrendKey>("7 Days")
   const [rangeOpen, setRangeOpen] = useState(false)
-  const [statuses, setStatuses] = useState<Record<string, HotspotStatus>>(INITIAL_STATUS)
+  const firms = useFirmsHotspots()
+  const [statuses, setStatuses] = useState<Record<string, HotspotStatus>>({})
   const [confFilter, setConfFilter] = useState<ConfFilter>("All")
   const [dispatched, setDispatched] = useState(0)
 
@@ -354,15 +341,18 @@ export default function FireRiskPage() {
   const twinNow = summarizeFrame(twin.live, twin.baseline, scopeBlocks).fireRisk
   const twinDry = summarizeFrame(twin.end, twin.baseline, scopeBlocks).fireRisk
 
-  // Hotspot + status verifikasi (state) → KPI, pin per block, tabel.
-  const hotspots = HOTSPOTS.map((h) => ({ ...h, status: statuses[h.code] }))
+  // Hotspot FIRMS + status verifikasi (state) → KPI, pin per block, tabel.
+  // Titik zona penyangga (block null) hanya ikut saat "All Blocks".
+  const feed = firms.feed
+  const windowHours = feed?.windowHours
+  const hotspots = (feed?.hotspots ?? []).map((h) => ({ ...h, status: statuses[h.id] ?? ("Investigating" as HotspotStatus) }))
   const inDivision = hotspots.filter((h) => matchesBlock(h.block, division))
   const activeHs = inDivision.filter((h) => isActive(h.status))
   const visibleHs = inDivision.filter((h) => confFilter === "All" || h.confidence === confFilter)
   const hsTone: Tone = activeHs.length
     ? activeHs.reduce<EwsLevel>((acc, h) => (LEVEL_RANK[h.level] > LEVEL_RANK[acc] ? h.level : acc), "normal")
     : "normal"
-  const activeBlocks = [...new Set(activeHs.map((h) => h.block))]
+  const activeBlocks = [...new Set(activeHs.map((h) => h.block ?? "Buffer zone"))]
 
   const blockRisk = TWIN_BLOCKS.map((block) => {
     const index = twin.live.blocks[block].fireRisk
@@ -398,11 +388,29 @@ export default function FireRiskPage() {
 
   const patrols = scaleNumber(6, estate) + dispatched
 
-  function setHotspotStatus(code: string, to: HotspotStatus) {
-    const prev = statuses[code]
-    setStatuses((s) => ({ ...s, [code]: to }))
-    toast.success(`${code} ${STATUS_MSG[to]}`, {
-      action: { label: "Undo", onClick: () => setStatuses((s) => ({ ...s, [code]: prev })) },
+  // Peringatan sumber data & isi baris kosong tabel hotspot.
+  const hsNotice = !feed
+    ? null
+    : firms.error || feed.stale
+      ? `Gagal memperbarui data FIRMS${firms.error ? ` (${firms.error})` : ""}. Menampilkan data ${fmtWib(feed.fetchedAt)}.`
+      : feed.failed.length
+        ? `Data ${feed.failed.join(", ")} tidak tersedia saat ini; tabel hanya memuat satelit lain.`
+        : null
+  const hsEmpty = !feed
+    ? firms.loading
+      ? "Memuat data NASA FIRMS…"
+      : `Data FIRMS tidak tersedia${firms.error ? `: ${firms.error}` : ""}`
+    : inDivision.length === 0
+      ? division === ALL_BLOCKS
+        ? `Tidak ada titik panas dalam ${windowHours} jam terakhir di KHG + buffer ${FIRMS_BUFFER_KM} km`
+        : `Tidak ada titik panas di ${division} dalam ${windowHours} jam terakhir`
+      : "Tidak ada titik panas untuk filter ini"
+
+  function setHotspotStatus(h: FirmsHotspot, to: HotspotStatus) {
+    const prev = statuses[h.id] ?? "Investigating"
+    setStatuses((s) => ({ ...s, [h.id]: to }))
+    toast.success(`${h.code} ${STATUS_MSG[to]}`, {
+      action: { label: "Undo", onClick: () => setStatuses((s) => ({ ...s, [h.id]: prev })) },
     })
   }
 
@@ -430,11 +438,23 @@ export default function FireRiskPage() {
         />
         <StatTile
           label="Active Hotspots"
-          value={String(activeHs.length)}
-          tone={hsTone}
+          value={feed ? String(activeHs.length) : "—"}
+          tone={feed ? hsTone : "offline"}
           icon={MapPinIcon}
-          status={activeHs.length ? `In ${activeBlocks.join(", ")}` : "No active detections"}
-          foot={`${inDivision.filter((h) => h.status === "Extinguished").length} extinguished · ${inDivision.filter((h) => h.status === "False positive").length} false positive`}
+          status={
+            !feed
+              ? firms.loading
+                ? "Loading NASA FIRMS…"
+                : "FIRMS unavailable"
+              : activeHs.length
+                ? `In ${activeBlocks.join(", ")}`
+                : "No active detections"
+          }
+          foot={
+            feed
+              ? `${inDivision.filter((h) => h.status === "Extinguished").length} extinguished · ${inDivision.filter((h) => h.status === "False positive").length} false positive · ${windowHours}h`
+              : "NASA FIRMS · VIIRS"
+          }
         />
         <StatTile
           label={dryDays > 0 && driest ? `Dry Days · ${driest.code}` : "Dry Days"}
@@ -725,12 +745,32 @@ export default function FireRiskPage() {
 
       <Panel>
         <PanelHeader
-          kicker="VIIRS · NOAA-20"
+          kicker="NASA FIRMS · VIIRS NOAA-20/21"
           icon={FlameIcon}
-          title="VIIRS Hotspots (72h)"
-          subtitle={`Satellite thermal anomalies 8–10 Sep · ${activeHs.length} active · WGS84`}
-          action={<ViewAll href="/map-view" label="View on Map" />}
+          title={windowHours ? `VIIRS Hotspots (${windowHours}h)` : "VIIRS Hotspots"}
+          subtitle={
+            feed
+              ? `KHG + ${FIRMS_BUFFER_KM} km buffer · ${activeHs.length} active · updated ${fmtWib(feed.fetchedAt)}`
+              : firms.loading
+                ? "Loading NASA FIRMS…"
+                : "NASA FIRMS unavailable"
+          }
+          action={
+            <a
+              href={FIRMS_MAP_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-[11.5px] font-medium text-emerald-400 transition-colors hover:text-emerald-300"
+            >
+              FIRMS Map <ExternalLinkIcon className="size-3" />
+            </a>
+          }
         />
+        {hsNotice && (
+          <p className="mx-4 mb-1 rounded-lg border border-amber-400/20 bg-amber-500/[0.07] px-3 py-2 text-[11px] text-amber-200/90">
+            {hsNotice}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2 pt-1" role="group" aria-label="Filter confidence">
           {CONFIDENCE_FILTERS.map((f) => {
             const count = f === "All" ? inDivision.length : inDivision.filter((h) => h.confidence === f).length
@@ -754,14 +794,15 @@ export default function FireRiskPage() {
           })}
         </div>
         <TableScroll className="pb-2">
-          <table className="w-full min-w-[1000px] text-left">
+          <table className="w-full min-w-[1100px] text-left">
             <thead>
               <tr>
                 <th className={tableTh}>ID</th>
-                <th className={tableTh}>Block</th>
+                <th className={tableTh}>Location</th>
                 <th className={tableTh}>Coordinates</th>
                 <th className={tableTh}>Confidence</th>
                 <th className={cn(tableTh, "text-right")}>FRP (MW)</th>
+                <th className={tableTh}>Satellite</th>
                 <th className={tableTh}>Detected</th>
                 <th className={tableTh}>Status</th>
                 <th className={tableTh}>EWS</th>
@@ -771,26 +812,34 @@ export default function FireRiskPage() {
             <tbody>
               {visibleHs.map((r) => {
                 const active = isActive(r.status)
+                const coords = formatLatLng(r.lat, r.lng)
                 return (
-                  <tr key={r.code} className={tableRow}>
+                  <tr key={r.id} className={tableRow}>
                     <td className={tableTd}>
                       <button
                         type="button"
-                        onClick={() => toast(`${r.code} · ${r.block} · FRP ${r.frp.toFixed(1)} MW · ${r.coords}`)}
+                        onClick={() =>
+                          toast(`${r.code} · ${locationOf(r)} · FRP ${r.frp.toFixed(1)} MW · ${coords}`, {
+                            description: `${r.satellite} VIIRS · ${fmtWib(r.acquiredAt)} · I-4 ${r.brightness.toFixed(1)} K`,
+                          })
+                        }
                         className="font-mono font-semibold text-white/85 underline-offset-2 hover:text-emerald-300 hover:underline"
                       >
                         {r.code}
                       </button>
                     </td>
-                    <td className={cn(tableTd, "whitespace-nowrap text-white/70")}>{r.block}</td>
-                    <td className={cn(tableTd, "whitespace-nowrap font-mono text-[11px] text-white/60")}>{r.coords}</td>
+                    <td className={cn(tableTd, "whitespace-nowrap", r.block ? "text-white/70" : "text-white/50")}>{locationOf(r)}</td>
+                    <td className={cn(tableTd, "whitespace-nowrap font-mono text-[11px] text-white/60")}>{coords}</td>
                     <td className={tableTd}>
                       <StatusDot tone={CONF_TONE[r.confidence]} label={r.confidence} />
                     </td>
                     <td className={cn(tableTd, "text-right font-mono font-medium tabular-nums", active ? "text-white/85" : "text-white/50")}>
                       {r.frp.toFixed(1)}
                     </td>
-                    <td className={cn(tableTd, "whitespace-nowrap text-white/60")}>{r.detected}</td>
+                    <td className={cn(tableTd, "whitespace-nowrap text-white/60")}>
+                      {r.satellite} · {r.daynight === "N" ? "Night" : "Day"}
+                    </td>
+                    <td className={cn(tableTd, "whitespace-nowrap text-white/60")}>{fmtWib(r.acquiredAt)}</td>
                     <td className={cn(tableTd, "whitespace-nowrap")}>
                       <StatusDot tone={STATUS_TONE[r.status]} label={r.status} />
                     </td>
@@ -803,7 +852,7 @@ export default function FireRiskPage() {
                           <button
                             key={a.to}
                             type="button"
-                            onClick={() => setHotspotStatus(r.code, a.to)}
+                            onClick={() => setHotspotStatus(r, a.to)}
                             className={cn(
                               "h-7 whitespace-nowrap rounded-md px-2.5 text-[11.5px] font-medium ring-1 transition-colors",
                               actionClass[a.kind]
@@ -812,8 +861,8 @@ export default function FireRiskPage() {
                             {a.label}
                           </button>
                         ))}
-                        {r.twinId ? (
-                          <OpenInTwin variant="icon" asset={r.twinId} layer="fireRisk" label={`Buka ${r.code} di Twin`} />
+                        {r.block ? (
+                          <OpenInTwin variant="icon" block={r.block} layer="fireRisk" label={`Buka ${r.block} di Twin`} />
                         ) : (
                           <span className="inline-block size-7" aria-hidden />
                         )}
@@ -824,14 +873,18 @@ export default function FireRiskPage() {
               })}
               {visibleHs.length === 0 && (
                 <tr className={tableRow}>
-                  <td className={cn(tableTd, "text-center text-white/50")} colSpan={9}>
-                    {division === ALL_BLOCKS ? "Tidak ada titik panas untuk filter ini" : `Tidak ada titik panas di ${division}`}
+                  <td className={cn(tableTd, "text-center text-white/50")} colSpan={10}>
+                    {hsEmpty}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </TableScroll>
+        <p className="border-t border-white/[0.06] px-4 py-2 text-[10.5px] text-white/50">
+          NASA FIRMS · VIIRS 375 m NRT, available ≤ 3 h after overpass ·{" "}
+          {feed?.source === "api" ? "FIRMS Area API" : "FIRMS public SE Asia file"} · refreshes every 10 min · times in WIB
+        </p>
       </Panel>
     </PeatShell>
   )

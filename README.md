@@ -13,6 +13,15 @@ Dashboard pemantauan lahan gambut dan perkebunan: muka air gambut (borehole), su
 
 Data pemantauan saat ini dilayani dari `lib/peatland/mock-data.ts`. Database hanya menyimpan akun dan peran untuk autentikasi. Geometri nyata: batas KHG (`lahan-gambut.ts`) dan sungai/parit (`waterways.ts`) berasal dari OpenStreetMap (© OpenStreetMap contributors, ODbL).
 
+### Hotspot NASA FIRMS
+
+Tabel hotspot, KPI *Active Hotspots*, dan pin per block di `/fire-risk` memakai data asli NASA FIRMS (VIIRS 375 m, NOAA-20 & NOAA-21) lewat `GET /api/firms/hotspots`. Cakupannya KHG + zona penyangga 10 km. Titik di dalam KHG dipetakan ke block/sector, dan titik di zona penyangga ditampilkan beserta jaraknya ke batas KHG. Server menyimpan hasilnya di cache 10 menit. Halaman lain (peta, twin, alarm) masih memakai hotspot dummy.
+
+- **Tanpa key:** memakai file CSV publik FIRMS Asia Tenggara 48 jam (~3 MB per satelit, disaring di server).
+- **Dengan `FIRMS_MAP_KEY`** (gratis, minta di <https://firms.modaps.eosdis.nasa.gov/api/map_key/>): memakai Area API dengan jendela 72 jam dan hanya mengambil kotak KHG. Batasnya 5000 transaksi per 10 menit.
+
+Status verifikasi (Confirm / False positive / Extinguished) baru disimpan di state halaman, jadi hilang saat reload.
+
 ## Setup
 
 ```bash
